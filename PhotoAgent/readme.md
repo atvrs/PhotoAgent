@@ -1,4 +1,4 @@
-# PhotoAgent 📸
+﻿# PhotoAgent 📸
 
 [![NET Framework](https://shields.io)](https://microsoft.com)
 [![Platform](https://shields.io)](https://microsoft.com)
