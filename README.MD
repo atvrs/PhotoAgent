@@ -2,7 +2,7 @@
 
 [![NET Framework](https://img.shields.io/badge/.NET-5C2D91?style=badge&logo=.net&logoColor=white)](https://microsoft.com)
 [![Platform](https://img.shields.io/badge/Platform-Windows-blue?logo=microsoft)](https://microsoft.com)
-[![License](https://img.shields.io/badge/license-MIT-green))](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **PhotoAgent** — это специализированное фоновое Windows-приложение для автоматизации процессов фотофиксации клиентов и документов с помощью внешних веб-камер. Разработано для бесшовной интеграции с внутренними CRM/ERP системами через обмен файлами (File-based API).
 
