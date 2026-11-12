@@ -1,0 +1,30 @@
+name: Windows build and command regression tests
+
+on:
+  push:
+    branches: [master, 'fix/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - uses: NuGet/setup-nuget@v2
+      - name: Restore camera libraries
+        run: nuget restore PhotoAgent/packages.config -PackagesDirectory packages -NonInteractive
+      - name: Build .NET Framework 4.8 application
+        run: msbuild PhotoAgent/PhotoAgent.csproj /p:Configuration=Release /p:SignManifests=false /p:GenerateManifests=false /verbosity:minimal
+      - name: Exercise file command handling
+        shell: powershell
+        run: ./tests/Run-CommandTests.ps1
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoAgent-Windows-Release
+          path: PhotoAgent/bin/Release/

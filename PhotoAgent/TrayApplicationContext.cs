@@ -1,9 +1,10 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
 using System.Reflection;
+using System.Linq;
 
 namespace PhotoAgent
 {
@@ -78,19 +79,21 @@ namespace PhotoAgent
             }
 
             TimeSpan elapsed =
-                DateTime.Now -
+                DateTime.UtcNow -
                 CaptureState.Started;
 
-            if (elapsed.TotalSeconds >
+            if (!CaptureState.TimedOut && elapsed.TotalSeconds >
                 ConfigManager.Current
                     .captureTimeoutSec)
             {
-                LogManager.Write(
-                    "Capture timeout. Busy reset."
-                );
-
-                CaptureState.IsBusy =
-                    false;
+                LogManager.Write("Capture timeout. Closing capture dialogs.");
+                CaptureState.MarkTimedOut();
+                foreach (Form form in Application.OpenForms.Cast<Form>()
+                    .Where(form => form is CaptureForm || form is ExtraCaptureForm).ToArray())
+                {
+                    form.DialogResult = DialogResult.Cancel;
+                    form.Close();
+                }
             }
         }
         private void TestCamera(
@@ -416,6 +419,10 @@ namespace PhotoAgent
                 watchdogTimer.Stop();
                 watchdogTimer.Dispose();
             }
+
+            commandWatcher?.Dispose();
+            maintenanceTimer?.Stop();
+            maintenanceTimer?.Dispose();
 
             Application.Exit();
         }

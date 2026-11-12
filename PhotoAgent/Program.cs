@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Windows.Forms;
+using System.Threading;
 
 namespace PhotoAgent
 {
@@ -8,12 +9,23 @@ namespace PhotoAgent
         [STAThread]
         static void Main()
         {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
+            bool createdNew;
+            using (var mutex = new Mutex(true, @"Local\PhotoAgent", out createdNew))
+            {
+                if (!createdNew)
+                    return;
 
-            Application.Run(
-                new TrayApplicationContext()
-            );
+                try
+                {
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    Application.Run(new TrayApplicationContext());
+                }
+                finally
+                {
+                    mutex.ReleaseMutex();
+                }
+            }
         }
     }
 }
