@@ -17,9 +17,15 @@ if ($LASTEXITCODE -ne 0) { throw 'Camera regression tests did not compile' }
 $stdout = Join-Path $outputFolder 'camera-tests.stdout.log'
 $stderr = Join-Path $outputFolder 'camera-tests.stderr.log'
 $process = Start-Process $executable -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+# Retain the native handle so Windows PowerShell can read ExitCode after WaitForExit.
+$null = $process.Handle
 $finished = $process.WaitForExit(60000)
 if (-not $finished) { Stop-Process -Id $process.Id -Force }
+if ($finished) {
+    $process.WaitForExit()
+    $process.Refresh()
+}
 Get-Content $stdout
 Get-Content $stderr
 if (-not $finished) { throw 'Camera regression tests exceeded 60 seconds' }
-if ($process.ExitCode -ne 0) { throw 'Camera regression tests failed' }
+if ($process.ExitCode -ne 0) { throw "Camera regression tests failed with exit code $($process.ExitCode)" }
