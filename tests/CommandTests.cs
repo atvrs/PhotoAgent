@@ -210,6 +210,10 @@ internal static class CommandTests
         env.ScanTwice();
         env.Scan();
         Assert(env.Status("cancel") == "error" && env.Captures == 1, "Cancellation was retried");
+        var response = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+            File.ReadAllText(env.ResponsePath("cancel")));
+        Assert((string)response["message"] == "Некорректное завершение обработки задания",
+            "Cancellation must return the incomplete-processing message to 1C");
         Assert(!CaptureState.IsBusy, "Cancellation left the agent busy");
     }
 

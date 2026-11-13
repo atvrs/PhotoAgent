@@ -12,7 +12,7 @@ $sources = @(
     (Join-Path $repository 'PhotoAgent\CaptureResult.cs')
     (Join-Path $repository 'PhotoAgent\CaptureState.cs')
 )
-& $compiler /nologo /target:exe "/out:$executable" /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll $sources
+& $compiler /nologo /codepage:65001 /target:exe "/out:$executable" /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll $sources
 if ($LASTEXITCODE -ne 0) { throw 'Command regression tests did not compile' }
 & $executable
 if ($LASTEXITCODE -ne 0) { throw 'Command regression tests failed' }

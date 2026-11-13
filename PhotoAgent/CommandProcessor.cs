@@ -77,7 +77,7 @@ namespace PhotoAgent
                     if (CaptureState.TimedOut)
                         throw new TimeoutException("Capture timeout");
                     if (!result.Success)
-                        throw new InvalidOperationException("Capture cancelled or failed");
+                        throw new InvalidOperationException("Некорректное завершение обработки задания");
 
                     Complete(commandFile, responseFile, new
                     {

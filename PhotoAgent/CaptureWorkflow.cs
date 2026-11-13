@@ -259,7 +259,8 @@ namespace PhotoAgent
 
                         documentFolder))
                 {
-                    form.ShowDialog();
+                    if (form.ShowDialog() != DialogResult.OK)
+                        return result;
                 }
 
                 foreach (string file in

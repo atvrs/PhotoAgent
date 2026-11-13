@@ -92,6 +92,9 @@
     <Compile Include="CameraConfigurator.cs" />
     <Compile Include="CameraInfo.cs" />
     <Compile Include="CameraManager.cs" />
+    <Compile Include="CameraPreviewControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
     <Compile Include="CameraSetupForm.cs" />
     <Compile Include="CaptureCommand.cs" />
     <Compile Include="CaptureForm.cs">

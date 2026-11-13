@@ -23,6 +23,9 @@ jobs:
       - name: Exercise file command handling
         shell: powershell
         run: ./tests/Run-CommandTests.ps1
+      - name: Exercise missing-camera windows and reconnection
+        shell: powershell
+        run: ./tests/Run-CameraTests.ps1
       - name: Upload portable build
         uses: actions/upload-artifact@v4
         with:

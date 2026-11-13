@@ -78,13 +78,7 @@ namespace PhotoAgent
                 return;
             }
 
-            TimeSpan elapsed =
-                DateTime.UtcNow -
-                CaptureState.Started;
-
-            if (!CaptureState.TimedOut && elapsed.TotalSeconds >
-                ConfigManager.Current
-                    .captureTimeoutSec)
+            if (CaptureState.IsTimeoutDue(ConfigManager.Current.captureTimeoutSec))
             {
                 LogManager.Write("Capture timeout. Closing capture dialogs.");
                 CaptureState.MarkTimedOut();

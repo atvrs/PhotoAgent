@@ -8,6 +8,7 @@ namespace PhotoAgent
         private static string requestId;
         private static DateTime started;
         private static bool timedOut;
+        private static DateTime? cameraWaitStarted;
 
         public static bool IsBusy
         {
@@ -39,6 +40,7 @@ namespace PhotoAgent
                 requestId = id;
                 started = DateTime.UtcNow;
                 timedOut = false;
+                cameraWaitStarted = null;
                 return true;
             }
         }
@@ -50,7 +52,42 @@ namespace PhotoAgent
 
         public static void End()
         {
-            lock (SyncRoot) { requestId = null; }
+            lock (SyncRoot)
+            {
+                requestId = null;
+                cameraWaitStarted = null;
+            }
+        }
+
+        public static bool IsWaitingForCamera
+        {
+            get { lock (SyncRoot) { return cameraWaitStarted.HasValue; } }
+        }
+
+        public static void SetWaitingForCamera(bool waiting)
+        {
+            lock (SyncRoot)
+            {
+                if (requestId == null)
+                    return;
+
+                if (waiting && !cameraWaitStarted.HasValue)
+                    cameraWaitStarted = DateTime.UtcNow;
+                else if (!waiting && cameraWaitStarted.HasValue)
+                {
+                    started += DateTime.UtcNow - cameraWaitStarted.Value;
+                    cameraWaitStarted = null;
+                }
+            }
+        }
+
+        public static bool IsTimeoutDue(int timeoutSeconds)
+        {
+            lock (SyncRoot)
+            {
+                return requestId != null && !timedOut && !cameraWaitStarted.HasValue
+                    && (DateTime.UtcNow - started).TotalSeconds > timeoutSeconds;
+            }
         }
     }
 }
