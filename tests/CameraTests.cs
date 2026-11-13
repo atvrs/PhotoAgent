@@ -22,8 +22,36 @@ internal static class CameraTests
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        try
+        int exitCode = 0;
+        using (var context = new ApplicationContext())
+        using (var startup = new Timer { Interval = 1 })
         {
+            startup.Tick += delegate
+            {
+                startup.Stop();
+                try
+                {
+                    RunAll();
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine(ex);
+                    exitCode = 1;
+                }
+                finally
+                {
+                    context.ExitThread();
+                }
+            };
+            startup.Start();
+            // Keep timers alive between successive modal forms, as in the tray application.
+            Application.Run(context);
+        }
+        return exitCode;
+    }
+
+    private static void RunAll()
+    {
             Run("Missing face camera resumes the same three-photo request", env => ReconnectWorkflow(env, "face"));
             Run("Missing document camera resumes after the face photo", env => ReconnectWorkflow(env, "document"));
             Run("Closing the missing-camera window returns an error", env => CloseMissing(env, false));
@@ -37,13 +65,6 @@ internal static class CameraTests
             Run("A different request gets busy while the camera is missing", BusyWhileWaiting);
             Run("A camera start failure is retried", StartFailure);
             Console.WriteLine("PASS: " + passed + " camera regression tests");
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine(ex);
-            return 1;
-        }
     }
 
     private static void Run(string name, Action<TestEnvironment> action)
