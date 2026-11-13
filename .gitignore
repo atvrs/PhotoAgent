@@ -361,3 +361,7 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Reproducible installer output and downloaded Microsoft prerequisite
+installer/output/
+installer/prerequisites/

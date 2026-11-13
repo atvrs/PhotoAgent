@@ -303,7 +303,9 @@ namespace PhotoAgent
     EventArgs e)
         {
             MessageBox.Show(
-                "PhotoAgent\r\nВерсия 1.0. Андрей Токмачёв.",
+                "PhotoAgent\r\nВерсия " +
+                Assembly.GetExecutingAssembly().GetName().Version.ToString(3) +
+                ". Андрей Токмачёв.",
                 "О программе",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information

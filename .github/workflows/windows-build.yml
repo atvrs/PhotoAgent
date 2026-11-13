@@ -1,4 +1,4 @@
-name: Windows build and command regression tests
+name: Windows build, tests and offline installer
 
 on:
   push:
@@ -12,6 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-2022
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
@@ -27,6 +28,28 @@ jobs:
         timeout-minutes: 3
         shell: powershell
         run: ./tests/Run-CameraTests.ps1
+      - name: Build full offline installer
+        timeout-minutes: 6
+        shell: powershell
+        run: ./installer/Build-Installer.ps1
+      - name: Exercise installation, upgrade and removal
+        timeout-minutes: 4
+        shell: powershell
+        run: ./tests/Run-InstallerTests.ps1
+      - name: Upload full offline installation package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoAgent-Full-Setup
+          path: installer/output/
+          compression-level: 0
+          if-no-files-found: error
+      - name: Upload installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoAgent-Installer-Logs
+          path: tests/bin/installer-*.log
+          if-no-files-found: ignore
       - name: Upload portable build
         uses: actions/upload-artifact@v4
         with:
