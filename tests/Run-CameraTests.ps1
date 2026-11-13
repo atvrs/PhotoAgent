@@ -14,5 +14,12 @@ Copy-Item $videoLibrary $outputFolder -Force
 Copy-Item (Join-Path $repository 'packages\AForge.2.2.5\lib\AForge.dll') $outputFolder -Force
 & $compiler /nologo /codepage:65001 /target:exe "/out:$executable" /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/r:$videoLibrary" $sources
 if ($LASTEXITCODE -ne 0) { throw 'Camera regression tests did not compile' }
-& $executable
-if ($LASTEXITCODE -ne 0) { throw 'Camera regression tests failed' }
+$stdout = Join-Path $outputFolder 'camera-tests.stdout.log'
+$stderr = Join-Path $outputFolder 'camera-tests.stderr.log'
+$process = Start-Process $executable -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+$finished = $process.WaitForExit(60000)
+if (-not $finished) { Stop-Process -Id $process.Id -Force }
+Get-Content $stdout
+Get-Content $stderr
+if (-not $finished) { throw 'Camera regression tests exceeded 60 seconds' }
+if ($process.ExitCode -ne 0) { throw 'Camera regression tests failed' }

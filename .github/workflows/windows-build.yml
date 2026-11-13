@@ -24,6 +24,7 @@ jobs:
         shell: powershell
         run: ./tests/Run-CommandTests.ps1
       - name: Exercise missing-camera windows and reconnection
+        timeout-minutes: 3
         shell: powershell
         run: ./tests/Run-CameraTests.ps1
       - name: Upload portable build

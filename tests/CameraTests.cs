@@ -19,6 +19,7 @@ internal static class CameraTests
     [STAThread]
     private static int Main()
     {
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         try
@@ -47,6 +48,8 @@ internal static class CameraTests
 
     private static void Run(string name, Action<TestEnvironment> action)
     {
+        Console.WriteLine("RUN: " + name);
+        Console.Out.Flush();
         using (var env = new TestEnvironment())
             action(env);
         passed++;
