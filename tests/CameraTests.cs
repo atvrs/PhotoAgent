@@ -350,6 +350,7 @@ internal static class CameraTests
             {
                 timer.Tick += delegate
                 {
+                    Console.WriteLine("Test tick at " + clock.ElapsedMilliseconds);
                     try
                     {
                         if (clock.ElapsedMilliseconds > 15000)
