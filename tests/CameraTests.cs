@@ -62,6 +62,8 @@ internal static class CameraTests
             Run("Unplugging clears stale frames and reconnects the assigned camera", Unplug);
             Run("Video source errors reconnect automatically", SourceError);
             Run("A slow USB shutdown cannot block closing or the 1C error reply", SlowShutdown);
+            Run("Document shots share a live camera until both are saved", DocumentCameraReuse);
+            Run("A new window waits for the previous camera release", ReopenAfterSlowShutdown);
             Run("A different request gets busy while the camera is missing", BusyWhileWaiting);
             Run("A camera start failure is retried", StartFailure);
             Console.WriteLine("PASS: " + passed + " camera regression tests");
@@ -276,6 +278,99 @@ internal static class CameraTests
         env.AssertIncomplete();
     }
 
+    private static void DocumentCameraReuse(TestEnvironment env)
+    {
+        CameraManager.Connected.Add("face");
+        CameraManager.Connected.Add("document");
+        using (var stopGate = new ManualResetEvent(false))
+        {
+            CameraManager.Factory = id => new FakeVideoSource(id)
+            {
+                StopGate = id == "document" ? stopGate : null
+            };
+            CameraPreviewControl documentPreview = null;
+            bool registrationSeen = false;
+            try
+            {
+                env.Process(false, form =>
+                {
+                    CameraPreviewControl preview = Preview(form);
+                    if (preview.IsWaitingForCamera)
+                        return;
+
+                    if (form.Text == "Паспорт")
+                        documentPreview = preview;
+                    if (form.Text == "Прописка")
+                    {
+                        Assert(ReferenceEquals(documentPreview, preview),
+                            "The document preview was recreated between shots");
+                        FakeVideoSource device = CameraManager.Devices.Single(d => d.Source == "document");
+                        Assert(device.IsRunning && device.StopCalls == 0,
+                            "The document camera was stopped before the second shot");
+                        Assert(!CaptureState.IsWaitingForCamera,
+                            "A ready shared preview incorrectly paused the request");
+                        registrationSeen = true;
+                    }
+                    PressKey(form, Keys.Space);
+                });
+                Assert(registrationSeen && env.Status() == "ok", "Both document shots must finish");
+                Assert(Directory.GetFiles(env.Photos, "*.jpg").Length == 3, "A photo was lost");
+            }
+            finally
+            {
+                stopGate.Set();
+                foreach (FakeVideoSource device in CameraManager.Devices)
+                    device.Stopped.WaitOne(5000);
+            }
+        }
+    }
+
+    private static void ReopenAfterSlowShutdown(TestEnvironment env)
+    {
+        CameraManager.Connected.Add("face");
+        using (var stopGate = new ManualResetEvent(false))
+        {
+            CameraManager.Factory = id => new FakeVideoSource(id) { StopGate = stopGate };
+            try
+            {
+                env.Process(false, form =>
+                {
+                    if (!Preview(form).IsWaitingForCamera)
+                        form.Close();
+                });
+                env.AssertIncomplete();
+                Assert(CameraManager.Devices.Count == 1, "First request must have opened a camera");
+
+                env.Request = Guid.NewGuid().ToString("N");
+                CameraManager.Factory = id => new FakeVideoSource(id);
+                bool waitedForRelease = false;
+                env.Process(false, form =>
+                {
+                    if (!stopGate.WaitOne(0))
+                    {
+                        Assert(Preview(form).IsWaitingForCamera,
+                            "Next request must wait for the previous camera shutdown");
+                        Assert(CameraManager.Devices.Count == 1,
+                            "The driver was reopened before the previous release completed");
+                        waitedForRelease = true;
+                        stopGate.Set();
+                    }
+                    else if (!Preview(form).IsWaitingForCamera)
+                        form.Close();
+                });
+                Assert(waitedForRelease && CameraManager.Devices.Count == 2,
+                    "A new request did not resume after release");
+                env.AssertIncomplete();
+            }
+            finally
+            {
+                stopGate.Set();
+                foreach (FakeVideoSource device in CameraManager.Devices)
+                    device.Stopped.WaitOne(5000);
+            }
+        }
+    }
+
     private static void StartFailure(TestEnvironment env)
     {
         CameraManager.Connected.Add("face");
@@ -320,7 +415,7 @@ internal static class CameraTests
 
     private sealed class TestEnvironment : IDisposable
     {
-        public readonly string Request = Guid.NewGuid().ToString("N");
+        public string Request = Guid.NewGuid().ToString("N");
         public readonly string Document = "CAMERA_TEST_" + Guid.NewGuid().ToString("N");
         public readonly string Root = Path.Combine(Path.GetTempPath(), "PhotoAgentCamera_" + Guid.NewGuid().ToString("N"));
         public string Responses { get { return Path.Combine(Root, "responses"); } }
@@ -451,6 +546,7 @@ namespace PhotoAgent
         public int FramesReceived { get { return 1; } }
         public long BytesReceived { get { return 64; } }
         public bool IsRunning { get; private set; }
+        public int StopCalls;
         public ManualResetEvent StopGate;
         public readonly ManualResetEvent Stopped = new ManualResetEvent(false);
 
@@ -468,7 +564,11 @@ namespace PhotoAgent
         {
             VideoSourceError(this, new VideoSourceErrorEventArgs("USB camera disconnected"));
         }
-        public void SignalToStop() { IsRunning = false; }
+        public void SignalToStop()
+        {
+            Interlocked.Increment(ref StopCalls);
+            IsRunning = false;
+        }
         public void WaitForStop()
         {
             if (StopGate != null)

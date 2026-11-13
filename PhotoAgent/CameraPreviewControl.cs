@@ -1,6 +1,5 @@
 using System;
 using System.Drawing;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using AForge.Video;
 
@@ -16,7 +15,6 @@ namespace PhotoAgent
         private readonly Label waitingLabel;
         private readonly Timer timer;
         private IVideoSource source;
-        private Task stoppingSource;
         private Bitmap currentFrame;
         private bool frameChanged;
         private bool sourceFailed;
@@ -112,8 +110,7 @@ namespace PhotoAgent
                 if (source != null && (!connected || failed || !source.IsRunning))
                     StopSource();
 
-                if (source == null && connected
-                    && (stoppingSource == null || stoppingSource.IsCompleted))
+                if (source == null && connected && !CameraShutdown.IsStopping(cameraId))
                 {
                     IVideoSource device = createSource(cameraId);
                     lock (frameSync) { source = device; }
@@ -121,6 +118,7 @@ namespace PhotoAgent
                     device.VideoSourceError += Source_Error;
                     device.PlayingFinished += Source_Finished;
                     device.Start();
+                    LogManager.Write("Camera start requested: " + cameraId);
                 }
             }
             catch (Exception ex)
@@ -149,9 +147,11 @@ namespace PhotoAgent
         {
             lock (frameSync)
             {
-                if (ReferenceEquals(sender, source))
-                    sourceFailed = true;
+                if (!ReferenceEquals(sender, source))
+                    return;
+                sourceFailed = true;
             }
+            LogManager.Write("Camera source error: " + e.Description);
         }
 
         private void Source_Finished(object sender, ReasonToFinishPlaying reason)
@@ -200,29 +200,19 @@ namespace PhotoAgent
                 frameChanged = false;
             }
 
+            if (oldSource != null)
+            {
+                oldSource.NewFrame -= Source_NewFrame;
+                oldSource.VideoSourceError -= Source_Error;
+                oldSource.PlayingFinished -= Source_Finished;
+                // The release barrier survives this control and protects the next window/request.
+                CameraShutdown.Stop(cameraId, oldSource);
+            }
+
             Image old = previewBox.Image;
             previewBox.Image = null;
             old?.Dispose();
             SetWaiting(true);
-            if (oldSource == null)
-                return;
-
-            oldSource.NewFrame -= Source_NewFrame;
-            oldSource.VideoSourceError -= Source_Error;
-            oldSource.PlayingFinished -= Source_Finished;
-            // A USB driver may take time to stop. Keep the close button and the 1C reply responsive.
-            stoppingSource = Task.Run(() =>
-            {
-                try
-                {
-                    oldSource.SignalToStop();
-                    oldSource.WaitForStop();
-                }
-                catch (Exception ex)
-                {
-                    LogManager.Write("Camera stop error: " + ex.Message);
-                }
-            });
         }
 
         public void Stop()

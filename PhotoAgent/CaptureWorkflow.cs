@@ -47,18 +47,14 @@ namespace PhotoAgent
                     return result;
                 }
 
-                if (!CapturePassport(
-                    cmd,
-                    documentFolder))
+                using (var documentPreview = new CameraPreviewControl(
+                    ConfigManager.Current.documentCameraId))
                 {
-                    return result;
-                }
+                    if (!CapturePassport(cmd, documentFolder, documentPreview))
+                        return result;
 
-                if (!CaptureRegistration(
-                    cmd,
-                    documentFolder))
-                {
-                    return result;
+                    if (!CaptureRegistration(cmd, documentFolder, documentPreview))
+                        return result;
                 }
 
                 ArchiveManager.ArchiveDocument(
@@ -143,12 +139,12 @@ namespace PhotoAgent
 
         private static bool CapturePassport(
             CaptureCommand cmd,
-            string folder)
+            string folder,
+            CameraPreviewControl preview)
         {
             using (CaptureForm form =
                 new CaptureForm(
-    ConfigManager.Current
-        .documentCameraId,
+    preview,
 
     "Паспорт",
 
@@ -191,12 +187,12 @@ namespace PhotoAgent
 
         private static bool CaptureRegistration(
             CaptureCommand cmd,
-            string folder)
+            string folder,
+            CameraPreviewControl preview)
         {
             using (CaptureForm form =
                 new CaptureForm(
-    ConfigManager.Current
-        .documentCameraId,
+    preview,
 
     "Прописка",
 

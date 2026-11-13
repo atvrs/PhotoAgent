@@ -10,6 +10,7 @@ namespace PhotoAgent
     {
         private readonly CameraPreviewControl preview;
         private readonly Button captureButton;
+        private readonly bool ownsPreview;
 
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -17,7 +18,19 @@ namespace PhotoAgent
         public Bitmap CapturedImage { get; private set; }
 
         public CaptureForm(string cameraId, string title, string infoText)
+            : this(new CameraPreviewControl(cameraId), title, infoText, true)
         {
+        }
+
+        internal CaptureForm(CameraPreviewControl preview, string title, string infoText)
+            : this(preview, title, infoText, false)
+        {
+        }
+
+        private CaptureForm(CameraPreviewControl preview, string title, string infoText, bool ownsPreview)
+        {
+            this.preview = preview;
+            this.ownsPreview = ownsPreview;
             Text = title;
             string iconFile = Path.Combine(Application.StartupPath, "PhotoAgent.ico");
             if (File.Exists(iconFile))
@@ -31,7 +44,6 @@ namespace PhotoAgent
             KeyPreview = true;
             ShowInTaskbar = true;
 
-            preview = new CameraPreviewControl(cameraId);
             preview.ReadyChanged += Preview_ReadyChanged;
             var infoLabel = new Label
             {
@@ -46,7 +58,7 @@ namespace PhotoAgent
                 Text = "Сделать снимок (Пробел / Enter)",
                 Height = 60,
                 Dock = DockStyle.Bottom,
-                Enabled = false
+                Enabled = !preview.IsWaitingForCamera
             };
             captureButton.Click += delegate { CaptureCurrentFrame(); };
             Controls.Add(preview);
@@ -58,8 +70,9 @@ namespace PhotoAgent
 
         private void CaptureForm_Load(object sender, EventArgs e)
         {
-            CaptureState.SetWaitingForCamera(true);
+            CaptureState.SetWaitingForCamera(preview.IsWaitingForCamera);
             preview.Start();
+            Preview_ReadyChanged(preview, EventArgs.Empty);
             WindowState = FormWindowState.Normal;
             SetForegroundWindow(Handle);
             BringToFront();
@@ -105,14 +118,23 @@ namespace PhotoAgent
             if (e.Cancel)
                 return;
 
-            preview.Stop();
+            preview.ReadyChanged -= Preview_ReadyChanged;
+            if (ownsPreview)
+                preview.Stop();
+            else
+                Controls.Remove(preview);
             CaptureState.SetWaitingForCamera(false);
         }
 
         protected override void Dispose(bool disposing)
         {
             if (disposing)
+            {
+                preview.ReadyChanged -= Preview_ReadyChanged;
+                if (!ownsPreview)
+                    Controls.Remove(preview);
                 CapturedImage?.Dispose();
+            }
             base.Dispose(disposing);
         }
     }
