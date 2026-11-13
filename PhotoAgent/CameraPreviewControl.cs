@@ -170,7 +170,7 @@ namespace PhotoAgent
             CheckConnection();
             lock (frameSync)
             {
-                if (stopped || sourceFailed || currentFrame == null)
+                if (stopped || IsWaitingForCamera || sourceFailed || currentFrame == null)
                     return null;
 
                 return (Bitmap)currentFrame.Clone();

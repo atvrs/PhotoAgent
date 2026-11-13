@@ -356,15 +356,27 @@ internal static class CameraTests
                             throw new Exception("Camera UI test timed out");
                         Form form = Application.OpenForms.Cast<Form>()
                             .FirstOrDefault(f => f is CaptureForm || f is ExtraCaptureForm);
+                        if (failure != null)
+                        {
+                            if (form != null)
+                            {
+                                form.DialogResult = DialogResult.Cancel;
+                                form.Close();
+                            }
+                            return;
+                        }
                         if (form != null)
                             drive(form);
                     }
                     catch (Exception ex)
                     {
                         failure = ex;
-                        timer.Stop();
-                        foreach (Form form in Application.OpenForms.Cast<Form>().ToArray())
+                        foreach (Form form in Application.OpenForms.Cast<Form>()
+                            .Where(f => f is CaptureForm || f is ExtraCaptureForm).ToArray())
+                        {
+                            form.DialogResult = DialogResult.Cancel;
                             form.Close();
+                        }
                     }
                 };
                 timer.Start();
