@@ -58,17 +58,13 @@ namespace PhotoAgent
 
         private void CaptureForm_Load(object sender, EventArgs e)
         {
-            LogManager.Write("Capture window loading: " + Text);
             CaptureState.SetWaitingForCamera(true);
             preview.Start();
-            LogManager.Write("Capture preview started: " + Text);
             WindowState = FormWindowState.Normal;
             SetForegroundWindow(Handle);
-            LogManager.Write("Capture foreground set: " + Text);
             BringToFront();
             Activate();
             Focus();
-            LogManager.Write("Capture window focused: " + Text);
         }
 
         private void Preview_ReadyChanged(object sender, EventArgs e)
@@ -115,12 +111,9 @@ namespace PhotoAgent
 
         protected override void Dispose(bool disposing)
         {
-            LogManager.Write("Capture window disposing: " + Text);
             if (disposing)
                 CapturedImage?.Dispose();
-            LogManager.Write("Capture image disposed: " + Text);
             base.Dispose(disposing);
-            LogManager.Write("Capture window disposed: " + Text);
         }
     }
 }

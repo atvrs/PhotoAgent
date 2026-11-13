@@ -23,29 +23,29 @@ internal static class CameraTests
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         int exitCode = 0;
-        using (var context = new ApplicationContext())
-        using (var startup = new Timer { Interval = 1 })
+        using (var host = new Form { ShowInTaskbar = false, Opacity = 0 })
         {
-            startup.Tick += delegate
+            host.Shown += delegate
             {
-                startup.Stop();
-                try
+                host.BeginInvoke(new Action(() =>
                 {
-                    RunAll();
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine(ex);
-                    exitCode = 1;
-                }
-                finally
-                {
-                    context.ExitThread();
-                }
+                    try
+                    {
+                        RunAll();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine(ex);
+                        exitCode = 1;
+                    }
+                    finally
+                    {
+                        host.Close();
+                    }
+                }));
             };
-            startup.Start();
-            // Keep timers alive between successive modal forms, as in the tray application.
-            Application.Run(context);
+            // Give successive modal windows a persistent owner on the CI desktop.
+            Application.Run(host);
         }
         return exitCode;
     }
@@ -350,7 +350,6 @@ internal static class CameraTests
             {
                 timer.Tick += delegate
                 {
-                    Console.WriteLine("Test tick at " + clock.ElapsedMilliseconds);
                     try
                     {
                         if (clock.ElapsedMilliseconds > 15000)

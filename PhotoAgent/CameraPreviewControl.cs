@@ -237,15 +237,12 @@ namespace PhotoAgent
 
         protected override void Dispose(bool disposing)
         {
-            LogManager.Write("Camera preview disposing: " + cameraId);
             if (disposing)
             {
                 Stop();
                 timer.Dispose();
             }
-            LogManager.Write("Camera preview timer disposed: " + cameraId);
             base.Dispose(disposing);
-            LogManager.Write("Camera preview disposed: " + cameraId);
         }
     }
 }
