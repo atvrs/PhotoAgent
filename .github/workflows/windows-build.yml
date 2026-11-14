@@ -2,7 +2,7 @@ name: Windows build, tests and Lite installer
 
 on:
   push:
-    branches: [master, 'fix/**', 'release/**']
+    branches: [master, 'fix/**', 'release/**', 'publish/**']
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   build:
+    if: "!startsWith(github.ref, 'refs/heads/publish/')"
     runs-on: windows-2022
     timeout-minutes: 15
     steps:
@@ -82,3 +83,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/publish_release.py --package package
+
+  resume-publication:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/publish/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resume the tested release draft without moving its tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/publish_release.py --resume
