@@ -38,6 +38,7 @@ Name: "C:\psa_photos"; Flags: uninsneveruninstall
 Name: "C:\psa_photos\commands"; Flags: uninsneveruninstall
 Name: "C:\psa_photos\responses"; Flags: uninsneveruninstall
 Name: "C:\psa_photos\photos"; Flags: uninsneveruninstall
+Name: "C:\psa_photos\transfer"; Flags: uninsneveruninstall
 Name: "C:\psa_photos\archive"; Flags: uninsneveruninstall
 Name: "C:\psa_photos\logs"; Flags: uninsneveruninstall
 
@@ -49,6 +50,7 @@ Source: "..\PhotoAgent\bin\Release\AForge.Video.dll"; DestDir: "{app}"; Flags: i
 Source: "..\PhotoAgent\bin\Release\AForge.Video.DirectShow.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\PhotoAgent\photoagent.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "INSTALL_RU.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\README.MD"; DestDir: "{app}"; DestName: "PROTOCOL_RU.md"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "licenses\*.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
@@ -94,13 +96,14 @@ begin
   Result := '';
   { Check the fixed 1C exchange directory before installing prerequisites.
     Never change ACLs or overwrite an existing camera configuration. }
-  SetArrayLength(Folders, 6);
+  SetArrayLength(Folders, 7);
   Folders[0] := 'C:\psa_photos';
   Folders[1] := 'C:\psa_photos\commands';
   Folders[2] := 'C:\psa_photos\responses';
   Folders[3] := 'C:\psa_photos\photos';
   Folders[4] := 'C:\psa_photos\archive';
   Folders[5] := 'C:\psa_photos\logs';
+  Folders[6] := 'C:\psa_photos\transfer';
   for I := 0 to GetArrayLength(Folders) - 1 do
   begin
     Folder := Folders[I];

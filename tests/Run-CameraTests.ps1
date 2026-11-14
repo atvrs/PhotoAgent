@@ -7,7 +7,7 @@ $compiler = Join-Path (Split-Path $buildTool -Parent) 'Roslyn\csc.exe'
 $executable = Join-Path $outputFolder 'CameraTests.exe'
 $videoLibrary = Join-Path $repository 'packages\AForge.Video.2.2.5\lib\AForge.Video.dll'
 $sources = @((Join-Path $PSScriptRoot 'CameraTests.cs'))
-foreach ($name in @('CameraPreviewControl', 'CameraShutdown', 'CaptureForm', 'ExtraCaptureForm', 'CaptureWorkflow', 'CaptureState', 'CaptureCommand', 'CaptureResult', 'CommandProcessor', 'Config', 'SessionManager', 'PhotoSession')) {
+foreach ($name in @('CameraPreviewControl', 'CameraShutdown', 'CaptureForm', 'ExtraCaptureForm', 'CaptureWorkflow', 'CaptureState', 'CaptureCommand', 'CaptureResult', 'CommandProcessor', 'PhotoTransfer', 'Config', 'SessionManager', 'PhotoSession')) {
     $sources += Join-Path $repository "PhotoAgent\$name.cs"
 }
 Copy-Item $videoLibrary $outputFolder -Force

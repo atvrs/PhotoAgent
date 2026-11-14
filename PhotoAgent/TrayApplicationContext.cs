@@ -364,6 +364,7 @@ namespace PhotoAgent
         private void CreateFolders()
         {
             Directory.CreateDirectory(rootFolder);
+            Directory.CreateDirectory(Path.Combine(rootFolder, "transfer"));
 
             Directory.CreateDirectory(
                 Path.Combine(rootFolder, "commands")

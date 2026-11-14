@@ -32,6 +32,11 @@ internal static class CommandTests
             Run("Timeout cannot return a successful response", Timeout);
             Run("Invalid JSON and unsafe names stay pending", InvalidCommands);
             Run("Unknown command returns an error", UnknownCommand);
+            Run("Photo notification failure delays done and retries without recapture", env => PhotoPublishRetry(env, false));
+            Run("Photo receipt is durable before its notification is published", env => PhotoPublishRetry(env, true));
+            Run("Interrupted photo transfer recovers without recapturing", InterruptedTransfer);
+            Run("Replaying done does not republish an acknowledged photo", PhotoReplay);
+            Run("Corrupt transfer receipts cannot announce an arbitrary path", InvalidReceipt);
             Run("Capture gate admits only one concurrent caller", CaptureGate);
             Run("Disposal stops the polling timer", Disposal);
             Console.WriteLine("PASS: " + passed + " command regression tests");
@@ -282,6 +287,93 @@ internal static class CommandTests
         CaptureState.End();
     }
 
+    private static void PhotoPublishRetry(TestEnvironment env, bool blockReceipt)
+    {
+        const string id = "photo-retry";
+        string blocked = blockReceipt
+            ? Path.Combine(env.DataRoot, "transfer", id, "photo.0001.json")
+            : Path.Combine(env.Responses, id + ".photo.0001.json");
+        env.OnCapture = delegate
+        {
+            Directory.CreateDirectory(blocked);
+            CaptureWorkflow.PhotoReady(env.SavedPhoto(), "lomo");
+            return new CaptureResult { Success = true };
+        };
+        env.Write(id);
+        env.ScanTwice();
+        Assert(env.Captures == 1 && !File.Exists(env.ResponsePath(id)),
+            "Done overtook an unpublished photo notification");
+        Assert(File.Exists(env.CommandPath(id)), "Publication failure lost the command");
+        Directory.Delete(blocked);
+        env.Scan();
+        Assert(env.Captures == 1 && env.Status(id) == "ok", "Publication retry recaptured a photo");
+        Assert(File.Exists(Path.Combine(env.Responses, id + ".photo.0001.json")),
+            "Missing photo notification after retry");
+        Assert(File.Exists(Path.Combine(env.DataRoot, "transfer", id, "photo.0001.json")),
+            "Missing durable photo receipt");
+        Assert(Directory.GetFiles(env.DataRoot, "*.tmp", SearchOption.AllDirectories).Length == 0,
+            "Temporary photo transfer file leaked");
+    }
+
+    private static void InterruptedTransfer(TestEnvironment env)
+    {
+        const string id = "interrupted";
+        var command = new CaptureCommand { request_id = id, document_number = "TEST_DOC" };
+        using (var transfer = new PhotoTransfer(command, env.Responses, env.DataRoot))
+            transfer.PhotoSaved(env.SavedPhoto(), "lomo");
+        string photo = Path.Combine(env.DataRoot, "transfer", id, "test.jpg");
+        byte[] original = File.ReadAllBytes(photo);
+        File.Delete(Path.Combine(env.Responses, id + ".photo.0001.json"));
+        env.Write(id);
+        env.ScanTwice();
+        Assert(env.Captures == 0 && env.Status(id) == "error",
+            "Interrupted request must not recapture or return success");
+        var response = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+            File.ReadAllText(env.ResponsePath(id)));
+        Assert((int)response["photo_count"] == 1, "Recovered photo missing from terminal manifest");
+        Assert(File.Exists(Path.Combine(env.Responses, id + ".photo.0001.json")),
+            "Recovered notification was not published");
+        Assert(Convert.ToBase64String(original) == Convert.ToBase64String(File.ReadAllBytes(photo)),
+            "Recovery changed the immutable JPEG");
+    }
+
+    private static void PhotoReplay(TestEnvironment env)
+    {
+        const string id = "photo-replay";
+        env.OnCapture = delegate
+        {
+            CaptureWorkflow.PhotoReady(env.SavedPhoto(), "extra");
+            return new CaptureResult { Success = true };
+        };
+        env.Write(id);
+        env.ScanTwice();
+        string photoEvent = Path.Combine(env.Responses, id + ".photo.0001.json");
+        Assert(File.Exists(photoEvent), "Photo was not announced");
+        File.Delete(photoEvent);
+        File.Delete(env.ResponsePath(id));
+        env.Write(id);
+        env.ScanTwice();
+        Assert(env.Captures == 1 && env.Status(id) == "ok", "Replay captured again");
+        Assert(!File.Exists(photoEvent), "Replay duplicated an acknowledged notification");
+    }
+
+    private static void InvalidReceipt(TestEnvironment env)
+    {
+        string folder = Path.Combine(env.DataRoot, "transfer", "corrupt");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "photo.0001.json"), new JavaScriptSerializer().Serialize(
+            new ReadyPhoto {
+                status = "photo_ready", request_id = "corrupt", document_number = "TEST_DOC",
+                sequence = 1, photo_type = "lomo", file = "test.jpg", relative_path = @"..\secret.txt"
+            }));
+        env.Write("corrupt");
+        env.ScanTwice();
+        Assert(env.Status("corrupt") == "error" && env.Captures == 0,
+            "Invalid receipt started capture");
+        Assert(Directory.GetFiles(env.Responses, "*.photo.*.json").Length == 0,
+            "Unvalidated receipt was published");
+    }
+
     private static void Disposal(TestEnvironment env)
     {
         env.Watcher.Start();
@@ -320,6 +412,7 @@ internal static class CommandTests
             "PhotoAgentTests_" + Guid.NewGuid().ToString("N"));
         public string Commands;
         public string Responses;
+        public string DataRoot { get { return root; } }
         public CommandWatcher Watcher;
         public int Captures;
         public ApartmentState CaptureApartment;
@@ -337,7 +430,14 @@ internal static class CommandTests
                 CaptureApartment = Thread.CurrentThread.GetApartmentState();
                 return OnCapture();
             };
-            Watcher = new CommandWatcher(Commands, path => CommandProcessor.Process(path, Responses));
+            Watcher = new CommandWatcher(Commands, path => CommandProcessor.Process(path, Responses, DataRoot));
+        }
+
+        public string SavedPhoto()
+        {
+            string file = Path.Combine(root, "test.jpg");
+            File.WriteAllBytes(file, new byte[] { 1, 2, 3, 4 });
+            return file;
         }
 
         public string CommandPath(string id) { return Path.Combine(Commands, id + ".json"); }
@@ -374,8 +474,17 @@ namespace PhotoAgent
     internal static class CaptureWorkflow
     {
         public static Func<CaptureResult> OnCapture;
-        public static CaptureResult CaptureDocument(CaptureCommand command) { return OnCapture(); }
-        public static CaptureResult CaptureExtra(CaptureCommand command) { return OnCapture(); }
+        public static Action<string, string> PhotoReady;
+        public static CaptureResult CaptureDocument(CaptureCommand command, Action<string, string> ready)
+        {
+            PhotoReady = ready;
+            return OnCapture();
+        }
+        public static CaptureResult CaptureExtra(CaptureCommand command, Action<string, string> ready)
+        {
+            PhotoReady = ready;
+            return OnCapture();
+        }
     }
 
     internal static class LogManager

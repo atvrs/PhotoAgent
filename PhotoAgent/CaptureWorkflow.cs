@@ -7,8 +7,13 @@ namespace PhotoAgent
 {
     public static class CaptureWorkflow
     {
-        public static CaptureResult CaptureDocument(
-    CaptureCommand cmd)
+        public static CaptureResult CaptureDocument(CaptureCommand cmd)
+        {
+            return CaptureDocument(cmd, null);
+        }
+
+        internal static CaptureResult CaptureDocument(
+            CaptureCommand cmd, Action<string, string> photoReady)
         {
             CaptureResult result =
                 new CaptureResult();
@@ -42,7 +47,7 @@ namespace PhotoAgent
 
                 if (!CaptureLomo(
                     cmd,
-                    documentFolder))
+                    documentFolder, photoReady))
                 {
                     return result;
                 }
@@ -50,10 +55,10 @@ namespace PhotoAgent
                 using (var documentPreview = new CameraPreviewControl(
                     ConfigManager.Current.documentCameraId))
                 {
-                    if (!CapturePassport(cmd, documentFolder, documentPreview))
+                    if (!CapturePassport(cmd, documentFolder, documentPreview, photoReady))
                         return result;
 
-                    if (!CaptureRegistration(cmd, documentFolder, documentPreview))
+                    if (!CaptureRegistration(cmd, documentFolder, documentPreview, photoReady))
                         return result;
                 }
 
@@ -88,6 +93,7 @@ namespace PhotoAgent
                 );
 
                 result.Success = false;
+                result.ErrorMessage = ex.Message;
 
                 return result;
             }
@@ -95,7 +101,7 @@ namespace PhotoAgent
 
         private static bool CaptureLomo(
             CaptureCommand cmd,
-            string folder)
+            string folder, Action<string, string> photoReady)
         {
             using (CaptureForm form =
                 new CaptureForm(
@@ -126,6 +132,8 @@ namespace PhotoAgent
                     fileName,
                     ImageFormat.Jpeg
                 );
+                if (photoReady != null)
+                    photoReady(fileName, "lomo");
 
                 LogManager.Write(
                     "Saved: "
@@ -140,7 +148,7 @@ namespace PhotoAgent
         private static bool CapturePassport(
             CaptureCommand cmd,
             string folder,
-            CameraPreviewControl preview)
+            CameraPreviewControl preview, Action<string, string> photoReady)
         {
             using (CaptureForm form =
                 new CaptureForm(
@@ -171,6 +179,8 @@ namespace PhotoAgent
                     fileName,
                     ImageFormat.Jpeg
                 );
+                if (photoReady != null)
+                    photoReady(fileName, "passport");
 
                 LogManager.Write(
                     "Saved: "
@@ -188,7 +198,7 @@ namespace PhotoAgent
         private static bool CaptureRegistration(
             CaptureCommand cmd,
             string folder,
-            CameraPreviewControl preview)
+            CameraPreviewControl preview, Action<string, string> photoReady)
         {
             using (CaptureForm form =
                 new CaptureForm(
@@ -219,6 +229,8 @@ namespace PhotoAgent
                     fileName,
                     ImageFormat.Jpeg
                 );
+                if (photoReady != null)
+                    photoReady(fileName, "registration");
 
                 LogManager.Write(
                     "Saved: "
@@ -229,8 +241,13 @@ namespace PhotoAgent
                 return true;
             }
         }
-        public static CaptureResult CaptureExtra(
-     CaptureCommand cmd)
+        public static CaptureResult CaptureExtra(CaptureCommand cmd)
+        {
+            return CaptureExtra(cmd, null);
+        }
+
+        internal static CaptureResult CaptureExtra(
+            CaptureCommand cmd, Action<string, string> photoReady)
         {
             CaptureResult result =
     new CaptureResult();
@@ -253,10 +270,13 @@ namespace PhotoAgent
 
                         cmd.document_number,
 
-                        documentFolder))
+                        documentFolder, photoReady))
                 {
                     if (form.ShowDialog() != DialogResult.OK)
+                    {
+                        result.ErrorMessage = form.ErrorMessage;
                         return result;
+                    }
                 }
 
                 foreach (string file in
@@ -282,6 +302,7 @@ namespace PhotoAgent
                 );
 
                 result.Success = false;
+                result.ErrorMessage = ex.Message;
 
                 return result;
             }

@@ -12,12 +12,21 @@ namespace PhotoAgent
         private readonly Label infoLabel;
         private readonly string documentNumber;
         private readonly string folder;
+        private readonly Action<string, string> photoReady;
         private int photoCounter = 1;
+        public string ErrorMessage { get; private set; }
 
         public ExtraCaptureForm(string cameraId, string documentNumber, string folder)
+            : this(cameraId, documentNumber, folder, null)
+        {
+        }
+
+        internal ExtraCaptureForm(string cameraId, string documentNumber, string folder,
+            Action<string, string> photoReady)
         {
             this.documentNumber = documentNumber;
             this.folder = folder;
+            this.photoReady = photoReady;
             Text = "Дополнительные снимки";
             string iconFile = Path.Combine(Application.StartupPath, "PhotoAgent.ico");
             if (File.Exists(iconFile))
@@ -69,22 +78,34 @@ namespace PhotoAgent
 
         private void SaveCurrentPhoto()
         {
-            using (Bitmap frame = preview.CaptureFrame())
+            try
             {
-                if (frame == null)
-                    return;
+                using (Bitmap frame = preview.CaptureFrame())
+                {
+                    if (frame == null)
+                        return;
 
-                string fileName = Path.Combine(folder,
-                    documentNumber + "_extra_" + photoCounter.ToString("D3") + ".jpg");
-                frame.Save(fileName, ImageFormat.Jpeg);
-                ArchiveManager.ArchiveDocument(documentNumber);
-                LogManager.Write("Saved extra: " + fileName);
+                    string fileName = Path.Combine(folder,
+                        documentNumber + "_extra_" + photoCounter.ToString("D3") + ".jpg");
+                    frame.Save(fileName, ImageFormat.Jpeg);
+                    if (photoReady != null)
+                        photoReady(fileName, "extra");
+                    ArchiveManager.ArchiveDocument(documentNumber);
+                    LogManager.Write("Saved extra: " + fileName);
+                }
+
+                if (SessionManager.Current != null)
+                    SessionManager.Current.ExtraPhotoCount++;
+                photoCounter++;
+                UpdateInfoText();
             }
-
-            if (SessionManager.Current != null)
-                SessionManager.Current.ExtraPhotoCount++;
-            photoCounter++;
-            UpdateInfoText();
+            catch (Exception ex)
+            {
+                ErrorMessage = ex.Message;
+                LogManager.Write("Extra photo error: " + ex.Message);
+                DialogResult = DialogResult.Cancel;
+                Close();
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)

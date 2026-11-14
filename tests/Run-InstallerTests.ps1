@@ -15,6 +15,7 @@ New-Item -ItemType Directory -Force $logs | Out-Null
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $dataRoot = 'C:\psa_photos'
 $photo = Join-Path $dataRoot 'photos\installer-test\keep.jpg'
+$transferPhoto = Join-Path $dataRoot 'transfer\installer-test\keep.jpg'
 $configPath = Join-Path $dataRoot 'config.json'
 $appProcess = $null
 $checks = 0
@@ -40,13 +41,15 @@ function Run-Setup([string]$File, [string]$Arguments) {
 function Assert-DataPreserved {
     Assert-Installer ((Get-FileHash $configPath).Hash -eq $script:configHash) 'Camera configuration preserved byte for byte'
     Assert-Installer ((Get-FileHash $photo).Hash -eq $script:photoHash) 'Existing photo preserved byte for byte'
-    foreach ($folder in 'commands', 'responses', 'photos', 'archive', 'logs') {
+    Assert-Installer ((Get-FileHash $transferPhoto).Hash -eq $script:photoHash) 'Transfer photo preserved byte for byte'
+    foreach ($folder in 'commands', 'responses', 'photos', 'transfer', 'archive', 'logs') {
         Assert-Installer (Test-Path (Join-Path $dataRoot $folder)) "Data folder preserved: $folder"
     }
 }
 
 try {
     New-Item -ItemType Directory -Force (Split-Path $photo -Parent) | Out-Null
+    New-Item -ItemType Directory -Force (Split-Path $transferPhoto -Parent) | Out-Null
     [IO.File]::WriteAllText($configPath, (@{
         previewWidth = 640; previewHeight = 480; captureTimeoutSec = 120
         logFileMaxMb = 1; logTotalMaxMb = 100
@@ -55,6 +58,7 @@ try {
         lomoCameraId = 'installer-test-face'; documentCameraId = 'installer-test-document'
     } | ConvertTo-Json))
     [IO.File]::WriteAllBytes($photo, [byte[]](1, 4, 8, 16, 32))
+    Copy-Item $photo $transferPhoto
     $script:configHash = (Get-FileHash $configPath).Hash
     $script:photoHash = (Get-FileHash $photo).Hash
     New-Item -Path $runKey -Force | Out-Null
@@ -68,10 +72,10 @@ try {
     Run-Setup $setup.FullName $arguments
     foreach ($file in 'PhotoAgent.exe', 'PhotoAgent.exe.config', 'AForge.dll', 'AForge.Video.dll',
         'AForge.Video.DirectShow.dll', 'photoagent.ico', 'unins000.exe', 'INSTALL_RU.md',
-        'LICENSE.txt', 'THIRD_PARTY_NOTICES.txt', 'licenses\lgpl-3.0.txt', 'licenses\gpl-3.0.txt') {
+        'LICENSE.txt', 'THIRD_PARTY_NOTICES.txt', 'licenses\lgpl-3.0.txt', 'licenses\gpl-3.0.txt', 'PROTOCOL_RU.md') {
         Assert-Installer (Test-Path (Join-Path $installDir $file)) "Installed file: $file"
     }
-    Assert-Installer ([Diagnostics.FileVersionInfo]::GetVersionInfo($installedExe).FileVersion -eq '1.1.0.0') 'Installed executable has expected version'
+    Assert-Installer ([Diagnostics.FileVersionInfo]::GetVersionInfo($installedExe).FileVersion -eq '1.2.0.0') 'Installed executable has expected version'
     $expectedRun = '"' + $installedExe + '"'
     Assert-Installer ((Get-ItemPropertyValue $runKey PhotoAgent) -eq $expectedRun) 'Autostart uses quoted installed path'
     $shortcuts = @(

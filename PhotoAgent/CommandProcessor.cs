@@ -8,8 +8,13 @@ namespace PhotoAgent
     public static class CommandProcessor
     {
         private const string ResponsesFolder = @"C:\psa_photos\responses";
-        private static readonly Dictionary<string, string> CompletedResponses =
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private sealed class CompletedRequest
+        {
+            internal string Json;
+            internal PhotoTransfer Transfer;
+        }
+        private static readonly Dictionary<string, CompletedRequest> CompletedResponses =
+            new Dictionary<string, CompletedRequest>(StringComparer.OrdinalIgnoreCase);
 
         public static bool Process(string commandFile)
         {
@@ -18,6 +23,11 @@ namespace PhotoAgent
 
         internal static bool Process(string commandFile, string responsesFolder)
         {
+            return Process(commandFile, responsesFolder, PhotoTransfer.DataRoot);
+        }
+
+        internal static bool Process(string commandFile, string responsesFolder, string dataRoot)
+        {
             CaptureCommand command;
             if (!TryReadCommand(commandFile, out command))
                 return false;
@@ -25,7 +35,7 @@ namespace PhotoAgent
             string responseFile = Path.Combine(responsesFolder, command.request_id + ".done");
             try
             {
-                string completedResponse;
+                CompletedRequest completedResponse;
                 lock (CompletedResponses)
                 {
                     CompletedResponses.TryGetValue(responseFile, out completedResponse);
@@ -33,7 +43,7 @@ namespace PhotoAgent
 
                 if (completedResponse != null)
                 {
-                    PublishResponse(commandFile, responseFile, completedResponse);
+                    PublishCompleted(commandFile, responseFile, completedResponse);
                     return true;
                 }
 
@@ -61,53 +71,65 @@ namespace PhotoAgent
                     return true;
                 }
 
-                try
+                using (var transfer = new PhotoTransfer(command, responsesFolder, dataRoot))
                 {
-                    LogManager.Write("Request received: " + command.request_id
-                        + "; command: " + command.command);
-
-                    CaptureResult result;
-                    if (command.command == "capture_document")
-                        result = CaptureWorkflow.CaptureDocument(command);
-                    else if (command.command == "capture_extra")
-                        result = CaptureWorkflow.CaptureExtra(command);
-                    else
-                        throw new InvalidOperationException("Unknown command: " + command.command);
-
-                    if (CaptureState.TimedOut)
-                        throw new TimeoutException("Capture timeout");
-                    if (!result.Success)
-                        throw new InvalidOperationException("Некорректное завершение обработки задания");
-
-                    Complete(commandFile, responseFile, new
+                    try
                     {
-                        status = "ok",
-                        request_id = command.request_id,
-                        document_number = command.document_number,
-                        files = result.Files
-                    });
-                }
-                catch (Exception ex)
-                {
-                    // A publishing failure is retried using the cached result, without recapture.
-                    lock (CompletedResponses)
-                    {
-                        if (CompletedResponses.ContainsKey(responseFile))
-                            throw;
+                        if (transfer.RecoverInterrupted())
+                            throw new InvalidOperationException(
+                                "Обработка задания прервана перезапуском PhotoAgent. Для новой съёмки используйте новый request_id.");
+
+                        LogManager.Write("Request received: " + command.request_id
+                            + "; command: " + command.command);
+
+                        CaptureResult result;
+                        if (command.command == "capture_document")
+                            result = CaptureWorkflow.CaptureDocument(command, transfer.PhotoSaved);
+                        else if (command.command == "capture_extra")
+                            result = CaptureWorkflow.CaptureExtra(command, transfer.PhotoSaved);
+                        else
+                            throw new InvalidOperationException("Unknown command: " + command.command);
+
+                        if (CaptureState.TimedOut)
+                            throw new TimeoutException("Capture timeout");
+                        if (!result.Success)
+                            throw new InvalidOperationException(result.ErrorMessage
+                                ?? "Некорректное завершение обработки задания");
+
+                        Complete(commandFile, responseFile, new
+                        {
+                            status = "ok",
+                            request_id = command.request_id,
+                            document_number = command.document_number,
+                            files = result.Files,
+                            photo_count = transfer.Photos.Count,
+                            photos = transfer.Photos
+                        }, transfer);
                     }
-
-                    LogManager.Write("Capture error: " + ex.Message);
-                    Complete(commandFile, responseFile, new
+                    catch (Exception ex)
                     {
-                        status = "error",
-                        request_id = command.request_id,
-                        document_number = command.document_number,
-                        message = ex.Message
-                    });
-                }
-                finally
-                {
-                    CaptureState.End();
+                        // A publishing failure is retried using the cached result, without recapture.
+                        lock (CompletedResponses)
+                        {
+                            if (CompletedResponses.ContainsKey(responseFile))
+                                throw;
+                        }
+
+                        LogManager.Write("Capture error: " + ex.Message);
+                        Complete(commandFile, responseFile, new
+                        {
+                            status = "error",
+                            request_id = command.request_id,
+                            document_number = command.document_number,
+                            message = ex.Message,
+                            photo_count = transfer.Photos.Count,
+                            photos = transfer.Photos
+                        }, transfer);
+                    }
+                    finally
+                    {
+                        CaptureState.End();
+                    }
                 }
 
                 return true;
@@ -153,11 +175,24 @@ namespace PhotoAgent
                 && value.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
         }
 
-        private static void Complete(string commandFile, string responseFile, object response)
+        private static void Complete(string commandFile, string responseFile, object response,
+            PhotoTransfer transfer)
         {
-            string json = new JavaScriptSerializer().Serialize(response);
-            lock (CompletedResponses) { CompletedResponses[responseFile] = json; }
-            PublishResponse(commandFile, responseFile, json);
+            var completed = new CompletedRequest
+            {
+                Json = new JavaScriptSerializer().Serialize(response),
+                Transfer = transfer
+            };
+            lock (CompletedResponses) { CompletedResponses[responseFile] = completed; }
+            PublishCompleted(commandFile, responseFile, completed);
+        }
+
+        private static void PublishCompleted(string commandFile, string responseFile,
+            CompletedRequest completed)
+        {
+            // The terminal response must not overtake any pending photo notice.
+            completed.Transfer.Flush();
+            PublishResponse(commandFile, responseFile, completed.Json);
         }
 
         private static void PublishResponse(string commandFile, string responseFile, string json)

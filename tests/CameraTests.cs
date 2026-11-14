@@ -66,6 +66,12 @@ internal static class CameraTests
             Run("A new window waits for the previous camera release", ReopenAfterSlowShutdown);
             Run("A different request gets busy while the camera is missing", BusyWhileWaiting);
             Run("A camera start failure is retried", StartFailure);
+            Run("Each document photo is announced before the next preview", IncrementalDocument);
+            Run("Extra photos are announced while the session remains open", IncrementalExtra);
+            Run("Cancellation preserves the first ready photo", PartialCancellation);
+            Run("A slow reader survives a new capture of the same document", SlowPhotoReader);
+            Run("Pending photo notifications retry while the next camera is missing", RetryWhileWaiting);
+            Run("Extra photo storage failure returns an error without crashing", ExtraStorageFailure);
             Console.WriteLine("PASS: " + passed + " camera regression tests");
     }
 
@@ -390,6 +396,164 @@ internal static class CameraTests
         env.AssertIncomplete();
     }
 
+    private static void IncrementalDocument(TestEnvironment env)
+    {
+        CameraManager.Connected.Add("face");
+        CameraManager.Connected.Add("document");
+        env.Process(false, form =>
+        {
+            if (Preview(form).IsWaitingForCamera)
+                return;
+            int expected = form.Text == "Ломосдатчик" ? 0 : form.Text == "Паспорт" ? 1 : 2;
+            var ready = env.Notifications();
+            Assert(ready.Count == expected, "Photo was not announced before the next preview");
+            Assert(!File.Exists(Path.Combine(env.Responses, env.Request + ".done")),
+                "Terminal response appeared before capture finished");
+            foreach (ReadyPhoto photo in ready)
+                AssertReadablePhoto(photo);
+            PressKey(form, Keys.Space);
+        });
+        var notices = env.Notifications();
+        Assert(env.Status() == "ok" && notices.Count == 3, "Missing incremental document photos");
+        Assert(string.Join(",", notices.Select(p => p.photo_type)) == "lomo,passport,registration",
+            "Photo roles or sequence changed");
+        Assert((int)env.Response()["photo_count"] == 3, "Final photo count is wrong");
+        Assert(((System.Collections.ICollection)env.Response()["photos"]).Count == 3, "Final manifest is incomplete");
+        Assert(((System.Collections.ICollection)env.Response()["files"]).Count == 3, "Legacy files contract changed");
+        Assert(Directory.GetFiles(env.Responses, "*.tmp").Length == 0, "Temporary notification leaked");
+    }
+
+    private static void IncrementalExtra(TestEnvironment env)
+    {
+        CameraManager.Connected.Add("document");
+        int saved = 0;
+        env.Process(true, form =>
+        {
+            if (Preview(form).IsWaitingForCamera)
+                return;
+            if (saved == 2)
+            {
+                PressKey(form, Keys.Escape);
+                return;
+            }
+            PressKey(form, Keys.Space);
+            saved++;
+            var ready = env.Notifications();
+            Assert(ready.Count == saved && ready.Last().photo_type == "extra",
+                "Extra photo notification waited for session completion");
+            AssertReadablePhoto(ready.Last());
+            Assert(!File.Exists(Path.Combine(env.Responses, env.Request + ".done")),
+                "Extra session ended before Escape");
+        });
+        Assert(env.Status() == "ok" && (int)env.Response()["photo_count"] == 2,
+            "Final extra manifest lost a photo");
+    }
+
+    private static void PartialCancellation(TestEnvironment env)
+    {
+        CameraManager.Connected.Add("face");
+        CameraManager.Connected.Add("document");
+        env.Process(false, form =>
+        {
+            if (Preview(form).IsWaitingForCamera)
+                return;
+            if (form.Text == "Ломосдатчик")
+                PressKey(form, Keys.Space);
+            else
+                form.Close();
+        });
+        env.AssertIncomplete();
+        Assert((int)env.Response()["photo_count"] == 1, "Cancellation lost the partial manifest");
+        AssertReadablePhoto(env.Notifications().Single());
+    }
+
+    private static void SlowPhotoReader(TestEnvironment env)
+    {
+        CameraManager.Connected.Add("face");
+        CameraManager.Connected.Add("document");
+        Action<Form> capture = form =>
+        {
+            if (!Preview(form).IsWaitingForCamera)
+                PressKey(form, Keys.Space);
+        };
+        env.Process(false, capture);
+        ReadyPhoto old = env.Notifications()[0];
+        string oldPath = Path.Combine(PhotoTransfer.DataRoot, old.relative_path);
+        byte[] original = File.ReadAllBytes(oldPath);
+        using (var slowReader = new FileStream(oldPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            env.Request = Guid.NewGuid().ToString("N");
+            env.Process(false, capture);
+            Assert(env.Status() == "ok", "New request collided with an old slow reader");
+            Assert(env.Notifications()[0].relative_path != old.relative_path,
+                "New request reused the previous immutable JPEG");
+            using (var copied = new MemoryStream())
+            {
+                slowReader.CopyTo(copied);
+                Assert(Convert.ToBase64String(original) == Convert.ToBase64String(copied.ToArray()),
+                    "Old photo changed during the slow transfer");
+            }
+        }
+    }
+
+    private static void RetryWhileWaiting(TestEnvironment env)
+    {
+        CameraManager.Connected.Add("face");
+        string blocked = Path.Combine(env.Responses, env.Request + ".photo.0001.json");
+        Directory.CreateDirectory(blocked);
+        bool released = false, retried = false;
+        env.Process(false, form =>
+        {
+            if (form.Text == "Ломосдатчик")
+            {
+                if (!Preview(form).IsWaitingForCamera)
+                    PressKey(form, Keys.Space);
+                return;
+            }
+            Assert(Preview(form).IsWaitingForCamera, "Document camera must still be missing");
+            if (!released)
+            {
+                Assert(!File.Exists(blocked), "Test did not block the photo notification");
+                Directory.Delete(blocked);
+                released = true;
+            }
+            else if (File.Exists(blocked))
+            {
+                retried = true;
+                AssertReadablePhoto(env.Notifications().Single());
+                Assert(!File.Exists(Path.Combine(env.Responses, env.Request + ".done")),
+                    "Retry completed an active capture");
+                form.Close();
+            }
+        });
+        Assert(retried, "Notification was not retried inside the camera wait");
+        env.AssertIncomplete();
+    }
+
+    private static void ExtraStorageFailure(TestEnvironment env)
+    {
+        CameraManager.Connected.Add("document");
+        env.Process(true, form =>
+        {
+            if (Preview(form).IsWaitingForCamera)
+                return;
+            string folder = Path.Combine(PhotoTransfer.DataRoot, "transfer", env.Request);
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, env.Document + "_extra_001.jpg"), "existing immutable file");
+            PressKey(form, Keys.Space);
+        });
+        Assert(env.Status() == "error", "Extra storage failure did not return an error");
+        Assert((int)env.Response()["photo_count"] == 0, "A failed snapshot was announced");
+        Assert(!CaptureState.IsBusy, "Storage failure left capture busy");
+    }
+
+    private static void AssertReadablePhoto(ReadyPhoto photo)
+    {
+        Assert(photo.status == "photo_ready" && photo.sequence > 0, "Invalid photo metadata");
+        using (var image = Image.FromFile(Path.Combine(PhotoTransfer.DataRoot, photo.relative_path)))
+            Assert(image.Width > 0 && image.Height > 0, "Announced JPEG is incomplete");
+    }
+
     private static CameraPreviewControl Preview(Form form)
     {
         return form.Controls.OfType<CameraPreviewControl>().Single();
@@ -420,6 +584,7 @@ internal static class CameraTests
         public readonly string Root = Path.Combine(Path.GetTempPath(), "PhotoAgentCamera_" + Guid.NewGuid().ToString("N"));
         public string Responses { get { return Path.Combine(Root, "responses"); } }
         public string Photos { get { return Path.Combine(@"C:\psa_photos\photos", Document); } }
+        private readonly HashSet<string> requests = new HashSet<string>();
 
         public TestEnvironment()
         {
@@ -433,6 +598,7 @@ internal static class CameraTests
 
         public void Process(bool extra, Action<Form> drive)
         {
+            requests.Add(Request);
             string commandFile = Path.Combine(Root, "command.json");
             File.WriteAllText(commandFile, new JavaScriptSerializer().Serialize(new
             {
@@ -487,10 +653,19 @@ internal static class CameraTests
             return (string)Response()["status"];
         }
 
-        private Dictionary<string, object> Response()
+        public Dictionary<string, object> Response()
         {
             return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
                 File.ReadAllText(Path.Combine(Responses, Request + ".done")));
+        }
+
+        public List<ReadyPhoto> Notifications()
+        {
+            if (!Directory.Exists(Responses))
+                return new List<ReadyPhoto>();
+            return Directory.GetFiles(Responses, Request + ".photo.*.json")
+                .Select(path => new JavaScriptSerializer().Deserialize<ReadyPhoto>(File.ReadAllText(path)))
+                .OrderBy(photo => photo.sequence).ToList();
         }
 
         public void AssertIncomplete()
@@ -508,6 +683,12 @@ internal static class CameraTests
             Directory.Delete(Root, true);
             if (Directory.Exists(Photos))
                 Directory.Delete(Photos, true);
+            foreach (string request in requests)
+            {
+                string transfer = Path.Combine(PhotoTransfer.DataRoot, "transfer", request);
+                if (Directory.Exists(transfer))
+                    Directory.Delete(transfer, true);
+            }
             foreach (FakeVideoSource device in CameraManager.Devices)
                 device.Stopped.WaitOne(5000);
         }

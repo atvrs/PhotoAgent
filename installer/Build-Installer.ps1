@@ -27,10 +27,15 @@ if ($signature.Status -ne 'Valid' -or
 }
 Write-Host "Verified Microsoft .NET offline runtime ($((Get-Item $runtime).Length) bytes)."
 
-& $iscc "/DAppVersion=$version" (Join-Path $installerRoot 'PhotoAgent.iss')
-if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+$compilerOutput = & $iscc "/DAppVersion=$version" (Join-Path $installerRoot 'PhotoAgent.iss')
+$compilerExitCode = $LASTEXITCODE
+$compilerOutput | ForEach-Object { Write-Host $_ }
+if ($compilerExitCode -ne 0) { throw "Inno Setup failed with exit code $compilerExitCode" }
+$compilerVersion = ($compilerOutput | Select-String '^Compiler engine version: (.+)$' |
+    Select-Object -First 1).Matches[0].Groups[1].Value
 $setup = Join-Path $output "PhotoAgent_Setup_$version.exe"
 Copy-Item (Join-Path $installerRoot 'INSTALL_RU.md') $output -Force
+Copy-Item (Join-Path $repoRoot 'README.MD') (Join-Path $output 'PROTOCOL_RU.md') -Force
 $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
 "$hash  $([IO.Path]::GetFileName($setup))" | Set-Content (Join-Path $output 'SHA256SUMS.txt') -Encoding ASCII
 $sourceCommit = if ($env:GITHUB_SHA) { $env:GITHUB_SHA } else { (& git -C $repoRoot rev-parse HEAD) }
@@ -39,7 +44,7 @@ $runtimeHash = (Get-FileHash $runtime -Algorithm SHA256).Hash.ToLowerInvariant()
 PhotoAgent $version
 Source commit: $sourceCommit
 Built in UTC: $([DateTime]::UtcNow.ToString('o'))
-Compiler: $([Diagnostics.FileVersionInfo]::GetVersionInfo($iscc).FileVersion)
+Compiler: $compilerVersion
 Microsoft .NET Framework 4.8 offline runtime SHA256: $runtimeHash
 Runtime signature: $($signature.Status), $($signature.SignerCertificate.Subject)
 Setup SHA256: $hash
