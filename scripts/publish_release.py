@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import zipfile
 
 
@@ -138,7 +139,16 @@ def publish(version, source, assets, expected_source=None):
         else:
             arguments += ["--generate-notes"]
         gh(*arguments)
-        release = find_release(prefix, tag)
+        # A newly created draft can appear in GitHub's authenticated release
+        # list with a short delay. Keep the tag and draft intact while retrying.
+        for delay in (0, 1, 2, 3, 5, 8, 13):
+            if delay:
+                time.sleep(delay)
+            release = find_release(prefix, tag)
+            if release is not None:
+                break
+        if release is None:
+            raise RuntimeError("Created release draft is not visible yet; publication can be retried safely")
     if not release["draft"]:
         raise RuntimeError("Assets may only be updated while the release is a draft")
 
