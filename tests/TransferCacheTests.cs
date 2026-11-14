@@ -39,6 +39,14 @@ internal static class TransferCacheTests
             Run("Pending receipt without a JPEG is not announced", OrphanPending);
             Run("Expired request cannot create a new snapshot", ExpiredWrite);
             Run("Invalid limits fall back without purging recent data", InvalidLimits);
+            Run("Global FIFO preserves a fresh sibling in the oldest request", InterleavedFiles);
+            Run("Global FIFO crosses request folders before deleting fresher files", TwoEvictions);
+            Run("Age cleanup preserves fresh files in a partially expired request", PartialAge);
+            Run("JPEG and matching receipts expire together using JPEG age", ReceiptPair);
+            Run("Expiry notice accumulates only removed photo names", PartialNotices);
+            Run("Legacy whole-request expiry notices are never narrowed", LegacyNotice);
+            Run("A locked expiry notice prevents unreported photo deletion", LockedNotice);
+            Run("Age cleanup visits photos from oldest to newest globally", AgeOrder);
             Console.WriteLine("PASS: " + passed + " transfer-cache regression tests");
             return 0;
         }
@@ -301,6 +309,111 @@ internal static class TransferCacheTests
         Assert(!env.Exists("old") && env.Exists("new"), "Invalid limits purged recent files");
     }
 
+    private static void InterleavedFiles(Fixture env)
+    {
+        string first = env.Photo("a", "old.jpg", 400, Now.AddDays(-3));
+        string fresh = env.Photo("a", "fresh.jpg", 400, Now.AddDays(-1));
+        string middle = env.Photo("b", "middle.jpg", 400, Now.AddDays(-2));
+        env.Clean(800);
+        Assert(!File.Exists(first) && File.Exists(fresh) && File.Exists(middle),
+            "Deleting an old request removed a fresher photo before another request's older photo");
+        Assert(env.Bytes() == 800 && ExpiredFiles(env, "a").SequenceEqual(new[] { "old.jpg" }),
+            "Partial eviction notice includes a surviving photo");
+    }
+
+    private static void TwoEvictions(Fixture env)
+    {
+        string old = env.Photo("a", "old.jpg", 400, Now.AddDays(-3));
+        string fresh = env.Photo("a", "fresh.jpg", 400, Now.AddDays(-1));
+        string middle = env.Photo("b", "middle.jpg", 400, Now.AddDays(-2));
+        env.Clean(400);
+        Assert(!File.Exists(old) && !File.Exists(middle) && File.Exists(fresh),
+            "FIFO did not cross folders in photo timestamp order");
+        Assert(env.Bytes() == 400, "FIFO did not stop when the quota was met");
+    }
+
+    private static void PartialAge(Fixture env)
+    {
+        string old = env.Photo("a", "old.jpg", 20, Now.AddMonths(-2));
+        string fresh = env.Photo("a", "fresh.jpg", 20, Now.AddDays(-1));
+        env.Clean();
+        Assert(!File.Exists(old) && File.Exists(fresh), "Age cleanup removed a fresh sibling");
+        Assert(ExpiredFiles(env, "a").SequenceEqual(new[] { "old.jpg" }), "Age notice is not per-photo");
+    }
+
+    private static void ReceiptPair(Fixture env)
+    {
+        string old = env.Photo("a", "old.jpg", 400, Now.AddDays(-3));
+        string fresh = env.Photo("a", "fresh.jpg", 400, Now.AddDays(-1));
+        string oldReceipt = env.Receipt("a", "old.jpg", 1, Now);
+        string freshReceipt = env.Receipt("a", "fresh.jpg", 2, Now.AddDays(-4));
+        long retained = new FileInfo(fresh).Length + new FileInfo(freshReceipt).Length;
+        env.Clean(retained);
+        Assert(!File.Exists(old) && !File.Exists(oldReceipt), "JPEG or its receipt leaked");
+        Assert(File.Exists(fresh) && File.Exists(freshReceipt),
+            "Receipt age overrode the newer JPEG timestamp");
+        Assert(env.Bytes() == retained, "Paired receipt accounting is incorrect");
+    }
+
+    private static void PartialNotices(Fixture env)
+    {
+        env.Photo("a", "old.jpg", 100, Now.AddDays(-3));
+        env.Photo("a", "middle.jpg", 100, Now.AddDays(-2));
+        string fresh = env.Photo("a", "fresh.jpg", 100, Now.AddDays(-1));
+        env.Clean(200);
+        Assert(ExpiredFiles(env, "a").SequenceEqual(new[] { "old.jpg" }), "First partial notice is wrong");
+        env.Clean(100);
+        Assert(ExpiredFiles(env, "a").SequenceEqual(new[] { "old.jpg", "middle.jpg" }),
+            "Second cleanup lost earlier expired filenames");
+        Assert(File.Exists(fresh), "Fresh photo was included in the accumulated notice");
+    }
+
+    private static void LegacyNotice(Fixture env)
+    {
+        string old = env.Photo("a", "old.jpg", 100, Now.AddDays(-3));
+        string fresh = env.Photo("a", "fresh.jpg", 100, Now.AddDays(-1));
+        string notice = "{\"status\":\"transfer_expired\",\"request_id\":\"a\",\"reason\":\"size\"}";
+        File.WriteAllText(env.Notice("a"), notice);
+        env.Clean(100);
+        Assert(!File.Exists(old) && File.Exists(fresh), "Legacy notice changed FIFO selection");
+        Assert(File.ReadAllText(env.Notice("a")) == notice, "Legacy whole-request notice was narrowed");
+    }
+
+    private static void LockedNotice(Fixture env)
+    {
+        env.Photo("a", "old.jpg", 100, Now.AddDays(-3));
+        string middle = env.Photo("a", "middle.jpg", 100, Now.AddDays(-2));
+        string fresh = env.Photo("a", "fresh.jpg", 100, Now.AddDays(-1));
+        env.Clean(200);
+        using (var reader = new FileStream(env.Notice("a"), FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            env.Clean(100);
+            Assert(File.Exists(middle) && File.Exists(fresh), "Photo was removed before its notice update");
+            Assert(ExpiredFiles(env, "a").SequenceEqual(new[] { "old.jpg" }), "Locked notice changed");
+        }
+        env.Clean(100);
+        Assert(!File.Exists(middle) && File.Exists(fresh), "Cleanup did not resume after notice unlock");
+    }
+
+    private static void AgeOrder(Fixture env)
+    {
+        string newest = env.Photo("a", "newest.jpg", 10, Now.AddMonths(-2));
+        string oldest = env.Photo("a", "oldest.jpg", 10, Now.AddMonths(-4));
+        string middle = env.Photo("b", "middle.jpg", 10, Now.AddMonths(-3));
+        env.Clean();
+        var removed = LogManager.Messages.Where(line => line.StartsWith("Transfer cache removed")).ToList();
+        Assert(removed.Count == 3 && removed[0].EndsWith(oldest) && removed[1].EndsWith(middle)
+            && removed[2].EndsWith(newest), "Age cleanup order is not globally oldest-first");
+    }
+
+    private static string[] ExpiredFiles(Fixture env, string request)
+    {
+        var notice = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+            File.ReadAllText(env.Notice(request)));
+        return ((System.Collections.IEnumerable)notice["expired_files"]).Cast<object>()
+            .Select(value => (string)value).ToArray();
+    }
+
     private static void ExpectIo(Action action)
     {
         try { action(); } catch (IOException) { return; }
@@ -316,6 +429,7 @@ internal static class TransferCacheTests
         {
             Directory.CreateDirectory(Transfer); Directory.CreateDirectory(Responses);
             ConfigManager.Current = new Config();
+            LogManager.Messages.Clear();
         }
         internal Config Config(long bytes)
         {
@@ -331,6 +445,23 @@ internal static class TransferCacheTests
         {
             string file = Path.Combine(Root, name); File.WriteAllBytes(file, new byte[bytes]); return file;
         }
+        internal string Photo(string request, string name, int bytes, DateTime date)
+        {
+            string folder = Path.Combine(Transfer, request); Directory.CreateDirectory(folder);
+            string file = Path.Combine(folder, name); File.WriteAllBytes(file, new byte[bytes]);
+            File.SetLastWriteTimeUtc(file, date); return file;
+        }
+        internal string Receipt(string request, string photo, int sequence, DateTime date)
+        {
+            string file = Path.Combine(Transfer, request, "photo." + sequence.ToString("D4") + ".json");
+            File.WriteAllText(file, new JavaScriptSerializer().Serialize(new ReadyPhoto
+            {
+                status = "photo_ready", request_id = request, document_number = "DOC",
+                sequence = sequence, photo_type = "extra", file = photo,
+                relative_path = Path.Combine("transfer", request, photo)
+            }));
+            File.SetLastWriteTimeUtc(file, date); return file;
+        }
         internal string Notice(string request) { return TransferCache.ExpiredNotice(Root, request); }
         internal bool Exists(string name) { return Directory.Exists(Path.Combine(Transfer, name)); }
         internal long Bytes() { return Directory.GetFiles(Transfer, "*", SearchOption.AllDirectories).Sum(p => new FileInfo(p).Length); }
@@ -342,5 +473,9 @@ internal static class TransferCacheTests
 namespace PhotoAgent
 {
     internal static class ConfigManager { internal static Config Current = new Config(); }
-    internal static class LogManager { internal static void Write(string message) { Console.WriteLine(message); } }
+    internal static class LogManager
+    {
+        internal static readonly List<string> Messages = new List<string>();
+        internal static void Write(string message) { Messages.Add(message); Console.WriteLine(message); }
+    }
 }

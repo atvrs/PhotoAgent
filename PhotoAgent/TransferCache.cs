@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
 
 namespace PhotoAgent
@@ -19,7 +20,10 @@ namespace PhotoAgent
         {
             internal string Path;
             internal string RequestId;
+            internal string RequestPath;
             internal List<FileInfo> Files = new List<FileInfo>();
+            internal List<FileInfo> GuardFiles = new List<FileInfo>();
+            internal List<string> ExpiredFiles = new List<string>();
             internal long Bytes;
             internal DateTime OldestUtc;
             internal bool Safe = true;
@@ -154,15 +158,14 @@ namespace PhotoAgent
                 ? config.transferRetentionMonths : Config.DefaultTransferRetentionMonths;
             int elapsedMonths = (nowUtc.Year - 1) * 12 + nowUtc.Month - 1;
             DateTime cutoff = months > elapsedMonths ? DateTime.MinValue : nowUtc.AddMonths(-months);
-            foreach (Entry entry in Scan(root))
+            foreach (Entry entry in Ordered(Scan(root)))
                 if (entry.OldestUtc < cutoff && CanDelete(entry, excluded))
                     DeleteEntry(dataRoot, entry, "age", nowUtc);
 
             Entry[] entries = Scan(root);
             long total = entries.Sum(entry => entry.Bytes);
             long max = MaxBytes(config);
-            foreach (Entry entry in entries.OrderBy(item => item.OldestUtc)
-                .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
+            foreach (Entry entry in Ordered(entries).Where(item => item.Bytes > 0))
             {
                 if (total <= max - required) break;
                 if (CanDelete(entry, excluded))
@@ -177,8 +180,15 @@ namespace PhotoAgent
 
         private static bool CanDelete(Entry entry, string excluded)
         {
-            return entry.Safe && !Pins.ContainsKey(entry.Path)
-                && !string.Equals(entry.Path, excluded, StringComparison.OrdinalIgnoreCase);
+            string protectedPath = entry.RequestPath ?? entry.Path;
+            return entry.Safe && !Pins.ContainsKey(protectedPath)
+                && !string.Equals(protectedPath, excluded, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static IOrderedEnumerable<Entry> Ordered(IEnumerable<Entry> entries)
+        {
+            return entries.OrderBy(item => item.OldestUtc)
+                .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase);
         }
 
         private static Entry[] Scan(string root)
@@ -187,20 +197,107 @@ namespace PhotoAgent
             foreach (DirectoryInfo directory in new DirectoryInfo(root).GetDirectories())
             {
                 var entry = new Entry { Path = directory.FullName, RequestId = directory.Name,
-                    OldestUtc = directory.LastWriteTimeUtc };
+                    RequestPath = directory.FullName, OldestUtc = directory.LastWriteTimeUtc };
                 Collect(directory, entry);
                 SetSizeAndAge(entry);
-                entries.Add(entry);
+                AddPhotoEntries(entry, entries);
             }
             foreach (FileInfo file in new DirectoryInfo(root).GetFiles())
             {
                 var entry = new Entry { Path = file.FullName, OldestUtc = file.LastWriteTimeUtc };
                 if ((file.Attributes & FileAttributes.ReparsePoint) != 0) entry.Safe = false;
                 else entry.Files.Add(file);
+                entry.GuardFiles = entry.Files;
                 SetSizeAndAge(entry);
                 entries.Add(entry);
             }
             return entries.ToArray();
+        }
+
+        private static void AddPhotoEntries(Entry request, List<Entry> entries)
+        {
+            request.GuardFiles = request.Files;
+            if (!request.Safe || request.Files.Count == 0)
+            {
+                entries.Add(request);
+                return;
+            }
+            var receipts = new Dictionary<string, List<FileInfo>>(StringComparer.OrdinalIgnoreCase);
+            var receiptTargets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (FileInfo file in request.Files)
+            {
+                string target = ReceiptTarget(file, request.RequestId);
+                if (target == null) continue;
+                List<FileInfo> matching;
+                if (!receipts.TryGetValue(target, out matching))
+                    receipts[target] = matching = new List<FileInfo>();
+                matching.Add(file);
+                receiptTargets[file.FullName] = target;
+            }
+            var remaining = new HashSet<string>(request.Files.Select(file => file.FullName),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (FileInfo photo in request.Files.Where(file =>
+                string.Equals(file.Extension, ".jpg", StringComparison.OrdinalIgnoreCase)))
+            {
+                remaining.Remove(photo.FullName);
+                Entry entry = PhotoEntry(request, photo);
+                entry.ExpiredFiles.Add(RelativeFile(request.RequestPath, photo.FullName));
+                List<FileInfo> matching;
+                if (receipts.TryGetValue(photo.FullName, out matching))
+                    foreach (FileInfo receipt in matching)
+                        if (remaining.Remove(receipt.FullName)) entry.Files.Add(receipt);
+                entry.Bytes = entry.Files.Sum(file => file.Length);
+                // A JPEG and its receipts form one eviction unit. Its age is
+                // the JPEG's age, never the parent folder's or a receipt's age.
+                entries.Add(entry);
+            }
+            foreach (FileInfo file in request.Files.Where(file => remaining.Contains(file.FullName)))
+            {
+                Entry entry = PhotoEntry(request, file);
+                string target;
+                if (receiptTargets.TryGetValue(file.FullName, out target))
+                    entry.ExpiredFiles.Add(RelativeFile(request.RequestPath, target));
+                entries.Add(entry);
+            }
+        }
+
+        private static Entry PhotoEntry(Entry request, FileInfo file)
+        {
+            return new Entry
+            {
+                Path = file.FullName, RequestId = request.RequestId, RequestPath = request.RequestPath,
+                Files = new List<FileInfo> { file }, GuardFiles = request.Files,
+                Bytes = file.Length, OldestUtc = file.LastWriteTimeUtc
+            };
+        }
+
+        private static string RelativeFile(string requestPath, string file)
+        {
+            return file.Substring(requestPath.TrimEnd(Path.DirectorySeparatorChar).Length + 1);
+        }
+
+        private static string ReceiptTarget(FileInfo file, string requestId)
+        {
+            if (file.Length > 65536 || !Regex.IsMatch(file.Name,
+                @"^photo\.[0-9]+\.json(?:\.pending)?$", RegexOptions.IgnoreCase)) return null;
+            try
+            {
+                var json = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+                    File.ReadAllText(file.FullName));
+                object id, name;
+                if (json == null || !json.TryGetValue("request_id", out id)
+                    || !string.Equals(id as string, requestId, StringComparison.OrdinalIgnoreCase)
+                    || !json.TryGetValue("file", out name)) return null;
+                string filename = name as string;
+                if (string.IsNullOrWhiteSpace(filename) || filename != Path.GetFileName(filename)
+                    || !string.Equals(Path.GetExtension(filename), ".jpg", StringComparison.OrdinalIgnoreCase))
+                    return null;
+                return Path.Combine(file.DirectoryName, filename);
+            }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+            catch (ArgumentException) { return null; }
+            catch (InvalidOperationException) { return null; }
         }
 
         private static void Collect(DirectoryInfo directory, Entry entry)
@@ -235,7 +332,7 @@ namespace PhotoAgent
             {
                 // Deny new readers and writers, but allow our deletion. If 1C
                 // already has any file open, this fails before any file is removed.
-                foreach (FileInfo file in entry.Files)
+                foreach (FileInfo file in entry.GuardFiles.Where(file => File.Exists(file.FullName)))
                 {
                     if (file.IsReadOnly) return;
                     guards.Add(new FileStream(file.FullName, FileMode.Open,
@@ -243,25 +340,7 @@ namespace PhotoAgent
                 }
                 if (entry.RequestId != null)
                 {
-                    string notice = ExpiredNotice(dataRoot, entry.RequestId);
-                    Directory.CreateDirectory(Path.GetDirectoryName(notice));
-                    if (!File.Exists(notice))
-                    {
-                        string temporary = notice + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                        try
-                        {
-                            File.WriteAllText(temporary, new JavaScriptSerializer().Serialize(new
-                            {
-                                status = "transfer_expired",
-                                request_id = entry.RequestId,
-                                reason = reason,
-                                expired_at = nowUtc.ToString("o", CultureInfo.InvariantCulture),
-                                message = "Временные файлы задания удалены из transfer по сроку или объёму"
-                            }));
-                            File.Move(temporary, notice);
-                        }
-                        finally { if (File.Exists(temporary)) File.Delete(temporary); }
-                    }
+                    RecordExpiredFiles(dataRoot, entry, reason, nowUtc);
                     foreach (FileInfo file in entry.Files) File.Delete(file.FullName);
                 }
                 else File.Delete(entry.Path);
@@ -272,10 +351,59 @@ namespace PhotoAgent
             finally { foreach (FileStream guard in guards) guard.Dispose(); }
             if (entry.RequestId != null)
             {
-                try { RemoveEmptyDirectories(new DirectoryInfo(entry.Path)); }
+                try { RemoveEmptyDirectories(new DirectoryInfo(entry.RequestPath)); }
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
             }
+        }
+
+        private static void RecordExpiredFiles(string dataRoot, Entry entry, string reason, DateTime nowUtc)
+        {
+            string notice = ExpiredNotice(dataRoot, entry.RequestId);
+            Directory.CreateDirectory(Path.GetDirectoryName(notice));
+            var files = new List<string>();
+            if (File.Exists(notice))
+            {
+                Dictionary<string, object> previous;
+                try
+                {
+                    previous = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+                        File.ReadAllText(notice));
+                }
+                catch (Exception ex) { throw new IOException("Invalid transfer expiry notice", ex); }
+                object status, names;
+                if (previous == null || !previous.TryGetValue("status", out status)
+                    || (status as string) != "transfer_expired")
+                    throw new IOException("Invalid transfer expiry notice");
+                // A 1.4.0 notice expired the whole request. Never narrow it.
+                if (!previous.TryGetValue("expired_files", out names)) return;
+                var sequence = names as System.Collections.IEnumerable;
+                if (sequence == null || names is string)
+                    throw new IOException("Invalid expired_files in transfer notice");
+                foreach (object name in sequence)
+                {
+                    if (!(name is string)) throw new IOException("Invalid expired filename");
+                    files.Add((string)name);
+                }
+                if (entry.ExpiredFiles.All(name => files.Contains(name, StringComparer.OrdinalIgnoreCase)))
+                    return;
+            }
+            foreach (string name in entry.ExpiredFiles)
+                if (!files.Contains(name, StringComparer.OrdinalIgnoreCase)) files.Add(name);
+            string temporary = notice + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temporary, new JavaScriptSerializer().Serialize(new
+                {
+                    status = "transfer_expired", request_id = entry.RequestId,
+                    reason = reason, expired_at = nowUtc.ToString("o", CultureInfo.InvariantCulture),
+                    expired_files = files,
+                    message = "Временные файлы удалены из transfer по сроку или объёму"
+                }));
+                if (File.Exists(notice)) File.Replace(temporary, notice, null);
+                else File.Move(temporary, notice);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
 
         private static void RemoveEmptyDirectories(DirectoryInfo directory)
