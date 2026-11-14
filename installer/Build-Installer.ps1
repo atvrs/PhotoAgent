@@ -52,6 +52,7 @@ $compilerVersion = ($compilerOutput | Select-String '^Compiler engine version: (
 $setup = Join-Path $output "PhotoAgent_Setup_$version$suffix.exe"
 Copy-Item (Join-Path $installerRoot $guideName) (Join-Path $output 'INSTALL_RU.md') -Force
 Copy-Item (Join-Path $repoRoot 'README.MD') (Join-Path $output 'PROTOCOL_RU.md') -Force
+Copy-Item (Join-Path $repoRoot 'docs\PhotoAgent_1C_Integration_RU.md') $output -Force
 $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
 "$hash  $([IO.Path]::GetFileName($setup))" | Set-Content (Join-Path $output 'SHA256SUMS.txt') -Encoding ASCII
 $sourceCommit = if ($env:GITHUB_SHA) { $env:GITHUB_SHA } else { (& git -C $repoRoot rev-parse HEAD) }
