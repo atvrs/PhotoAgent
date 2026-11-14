@@ -1,0 +1,102 @@
+name: Windows build, tests and Lite installer
+
+on:
+  push:
+    branches: [master, 'fix/**', 'release/**', 'publish/**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: "!startsWith(github.ref, 'refs/heads/publish/')"
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - uses: NuGet/setup-nuget@v2
+      - name: Restore camera libraries
+        run: nuget restore PhotoAgent/packages.config -PackagesDirectory packages -NonInteractive
+      - name: Build .NET Framework 4.8 application
+        run: msbuild PhotoAgent/PhotoAgent.csproj /p:Configuration=Release /p:SignManifests=false /p:GenerateManifests=false /verbosity:minimal
+      - name: Exercise file command handling
+        shell: powershell
+        run: ./tests/Run-CommandTests.ps1
+      - name: Exercise archive retention and config migration
+        shell: powershell
+        run: ./tests/Run-ArchiveTests.ps1
+      - name: Exercise transfer age, size, slow readers and quota admission
+        shell: powershell
+        run: ./tests/Run-TransferCacheTests.ps1
+      - name: Exercise missing-camera windows and reconnection
+        timeout-minutes: 3
+        shell: powershell
+        run: ./tests/Run-CameraTests.ps1
+      - name: Build lightweight installer without .NET
+        timeout-minutes: 6
+        shell: powershell
+        run: ./installer/Build-Installer.ps1 -WithoutNet
+      - name: Exercise installation, upgrade and removal
+        timeout-minutes: 4
+        shell: powershell
+        run: ./tests/Run-InstallerTests.ps1 -WithoutNet
+      - name: Validate GitHub release package
+        run: python scripts/publish_release.py --package installer/output-lite --assets installer/release-assets --prepare-only
+      - name: Upload lightweight installation package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoAgent-Lite-Setup
+          path: installer/output-lite/
+          compression-level: 0
+          if-no-files-found: error
+      - name: Upload installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoAgent-Installer-Logs
+          path: tests/bin/installer-*.log
+          if-no-files-found: ignore
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoAgent-Windows-Release
+          path: PhotoAgent/bin/Release/
+
+  publish:
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/'))
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: photoagent-release-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: PhotoAgent-Lite-Setup
+          path: package
+      - name: Publish tested release and verify uploaded assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/publish_release.py --package package
+
+  resume-publication:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/publish/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resume the tested release draft without moving its tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/publish_release.py --resume

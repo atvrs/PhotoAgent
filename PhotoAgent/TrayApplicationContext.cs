@@ -1,9 +1,10 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
 using System.Reflection;
+using System.Linq;
 
 namespace PhotoAgent
 {
@@ -61,6 +62,7 @@ namespace PhotoAgent
             try
             {
                 ArchiveManager.RunMaintenance();
+                TransferCache.RunMaintenance();
 
                 LogManager.RunMaintenance();
             }
@@ -77,20 +79,16 @@ namespace PhotoAgent
                 return;
             }
 
-            TimeSpan elapsed =
-                DateTime.Now -
-                CaptureState.Started;
-
-            if (elapsed.TotalSeconds >
-                ConfigManager.Current
-                    .captureTimeoutSec)
+            if (CaptureState.IsTimeoutDue(ConfigManager.Current.captureTimeoutSec))
             {
-                LogManager.Write(
-                    "Capture timeout. Busy reset."
-                );
-
-                CaptureState.IsBusy =
-                    false;
+                LogManager.Write("Capture timeout. Closing capture dialogs.");
+                CaptureState.MarkTimedOut();
+                foreach (Form form in Application.OpenForms.Cast<Form>()
+                    .Where(form => form is CaptureForm || form is ExtraCaptureForm).ToArray())
+                {
+                    form.DialogResult = DialogResult.Cancel;
+                    form.Close();
+                }
             }
         }
         private void TestCamera(
@@ -165,6 +163,7 @@ namespace PhotoAgent
             ConfigManager.Load();
 
             ArchiveManager.RunMaintenance();
+            TransferCache.RunMaintenance();
 
             
             LogManager.Write(
@@ -306,7 +305,9 @@ namespace PhotoAgent
     EventArgs e)
         {
             MessageBox.Show(
-                "PhotoAgent\r\nВерсия 1.0. Андрей Токмачёв.",
+                "PhotoAgent\r\nВерсия " +
+                Assembly.GetExecutingAssembly().GetName().Version.ToString(3) +
+                ". Андрей Токмачёв.",
                 "О программе",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information
@@ -365,6 +366,7 @@ namespace PhotoAgent
         private void CreateFolders()
         {
             Directory.CreateDirectory(rootFolder);
+            Directory.CreateDirectory(Path.Combine(rootFolder, "transfer"));
 
             Directory.CreateDirectory(
                 Path.Combine(rootFolder, "commands")
@@ -416,6 +418,10 @@ namespace PhotoAgent
                 watchdogTimer.Stop();
                 watchdogTimer.Dispose();
             }
+
+            commandWatcher?.Dispose();
+            maintenanceTimer?.Stop();
+            maintenanceTimer?.Dispose();
 
             Application.Exit();
         }

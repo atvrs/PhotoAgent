@@ -4,6 +4,8 @@ namespace PhotoAgent
 {
     public class CaptureResult
     {
+        public string ErrorMessage { get; set; }
+
         public bool Success
         {
             get;

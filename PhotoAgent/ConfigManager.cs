@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Web.Script.Serialization;
 
@@ -27,26 +28,68 @@ namespace PhotoAgent
 
         public static void Load()
         {
-            if (!File.Exists(ConfigFile))
+            Load(ConfigFile);
+        }
+
+        internal static void Load(string configFile)
+        {
+            if (!File.Exists(configFile))
             {
                 CreateDefault();
-                Save();
+                WriteConfig(configFile, new JavaScriptSerializer().Serialize(_config));
+                if (configFile == ConfigFile)
+                    ShortcutManager.CreateShortcutIfNotExist();
 
                 return;
             }
 
             string json =
                 File.ReadAllText(
-                    ConfigFile
+                    configFile
                 );
 
             JavaScriptSerializer serializer =
                 new JavaScriptSerializer();
 
-            _config =
-                serializer.Deserialize<Config>(
-                    json
-                );
+            var values = serializer.Deserialize<Dictionary<string, object>>(json);
+            if (values == null)
+                throw new InvalidDataException("Configuration must be a JSON object");
+
+            object months;
+            bool changed = false;
+            if (!values.TryGetValue("archiveRetentionMonths", out months)
+                || !(months is int) || (int)months <= 0)
+            {
+                values["archiveRetentionMonths"] = Config.DefaultArchiveRetentionMonths;
+                changed = true;
+            }
+            changed = values.Remove("archiveRetentionDays") || changed;
+            if (!values.TryGetValue("transferRetentionMonths", out months)
+                || !(months is int) || (int)months <= 0)
+            {
+                values["transferRetentionMonths"] = Config.DefaultTransferRetentionMonths;
+                changed = true;
+            }
+            object maxMb;
+            double max = 0;
+            if (values.TryGetValue("transferMaxMb", out maxMb)
+                && (maxMb is int || maxMb is long || maxMb is double || maxMb is decimal))
+                max = Convert.ToDouble(maxMb);
+            if (max <= 0 || double.IsNaN(max) || double.IsInfinity(max))
+            {
+                values["transferMaxMb"] = Config.DefaultTransferMaxMb;
+                changed = true;
+            }
+            if (changed)
+                json = serializer.Serialize(values);
+            _config = serializer.Deserialize<Config>(json);
+            if (changed)
+            {
+                WriteConfig(configFile, json);
+                LogManager.Write("Storage configuration migrated. Archive months: "
+                    + _config.archiveRetentionMonths + "; transfer months: "
+                    + _config.transferRetentionMonths + "; transfer MB: " + _config.transferMaxMb);
+            }
         }
 
         public static void Save()
@@ -59,12 +102,27 @@ namespace PhotoAgent
                     _config
                 );
 
-            File.WriteAllText(
-                ConfigFile,
-                json
-            );
+            WriteConfig(ConfigFile, json);
             // Автоматический вызов создания ярлыка
             ShortcutManager.CreateShortcutIfNotExist();
+        }
+
+        private static void WriteConfig(string configFile, string json)
+        {
+            string temporaryFile = configFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temporaryFile, json);
+                if (File.Exists(configFile))
+                    File.Replace(temporaryFile, configFile, configFile + ".bak");
+                else
+                    File.Move(temporaryFile, configFile);
+            }
+            finally
+            {
+                if (File.Exists(temporaryFile))
+                    File.Delete(temporaryFile);
+            }
         }
 
         private static void CreateDefault()
@@ -80,7 +138,7 @@ namespace PhotoAgent
                     logFileMaxMb = 1,
                     logTotalMaxMb = 100,
 
-                    archiveRetentionDays = 365,
+                    archiveRetentionMonths = Config.DefaultArchiveRetentionMonths,
                     archiveMaxGb = 100,
 
                     alwaysOnTop = true,

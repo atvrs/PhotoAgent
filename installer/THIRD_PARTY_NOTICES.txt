@@ -1,0 +1,23 @@
+PhotoAgent
+Copyright (c) 2026 Andrey Tokmachev
+MIT License, see LICENSE.txt.
+Source: https://github.com/atvrs/PhotoAgent
+
+AForge.NET Framework 2.2.5
+AForge.dll, AForge.Video.dll, AForge.Video.DirectShow.dll
+Copyright (c) AForge.NET, Andrew Kirillov and contributors.
+These unmodified, separately linked libraries are licensed under GNU LGPL v3.
+See licenses\lgpl-3.0.txt, licenses\gpl-3.0.txt and licenses\AForge-Copyright.txt.
+Project and corresponding source:
+https://github.com/andrewkirillov/AForge.NET
+https://www.aforgenet.com/framework/downloads.html
+You may replace the library DLLs with compatible modified versions.
+The MIT license for PhotoAgent does not restrict the rights granted by LGPL
+to modify these libraries or debug those modifications.
+
+Microsoft .NET Framework 4.8 offline redistributable
+Copyright Microsoft Corporation. Licensed under Microsoft's own license terms.
+The full package embeds the signed Microsoft installer unchanged and runs it
+only if .NET 4.8 or a later compatible .NET Framework runtime is absent.
+The Lite package does not include or download the .NET runtime.
+https://dotnet.microsoft.com/download/dotnet-framework/thank-you/net48-offline-installer
