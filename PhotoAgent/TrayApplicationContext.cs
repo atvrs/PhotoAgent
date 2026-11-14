@@ -62,6 +62,7 @@ namespace PhotoAgent
             try
             {
                 ArchiveManager.RunMaintenance();
+                TransferCache.RunMaintenance();
 
                 LogManager.RunMaintenance();
             }
@@ -162,6 +163,7 @@ namespace PhotoAgent
             ConfigManager.Load();
 
             ArchiveManager.RunMaintenance();
+            TransferCache.RunMaintenance();
 
             
             LogManager.Write(

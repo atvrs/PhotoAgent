@@ -64,14 +64,31 @@ namespace PhotoAgent
                 changed = true;
             }
             changed = values.Remove("archiveRetentionDays") || changed;
+            if (!values.TryGetValue("transferRetentionMonths", out months)
+                || !(months is int) || (int)months <= 0)
+            {
+                values["transferRetentionMonths"] = Config.DefaultTransferRetentionMonths;
+                changed = true;
+            }
+            object maxMb;
+            double max = 0;
+            if (values.TryGetValue("transferMaxMb", out maxMb)
+                && (maxMb is int || maxMb is long || maxMb is double || maxMb is decimal))
+                max = Convert.ToDouble(maxMb);
+            if (max <= 0 || double.IsNaN(max) || double.IsInfinity(max))
+            {
+                values["transferMaxMb"] = Config.DefaultTransferMaxMb;
+                changed = true;
+            }
             if (changed)
                 json = serializer.Serialize(values);
             _config = serializer.Deserialize<Config>(json);
             if (changed)
             {
                 WriteConfig(configFile, json);
-                LogManager.Write("Archive configuration migrated to months: "
-                    + _config.archiveRetentionMonths);
+                LogManager.Write("Storage configuration migrated. Archive months: "
+                    + _config.archiveRetentionMonths + "; transfer months: "
+                    + _config.transferRetentionMonths + "; transfer MB: " + _config.transferMaxMb);
             }
         }
 

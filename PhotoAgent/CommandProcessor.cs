@@ -35,6 +35,21 @@ namespace PhotoAgent
             string responseFile = Path.Combine(responsesFolder, command.request_id + ".done");
             try
             {
+                if (File.Exists(TransferCache.ExpiredNotice(dataRoot, command.request_id)))
+                {
+                    PublishResponse(commandFile, responseFile, new JavaScriptSerializer().Serialize(new
+                    {
+                        status = "error",
+                        code = "transfer_cache_expired",
+                        request_id = command.request_id,
+                        document_number = command.document_number,
+                        message = "Временные файлы задания уже удалены из transfer. Для новой съёмки нужен новый request_id.",
+                        photo_count = 0,
+                        photos = new ReadyPhoto[0]
+                    }));
+                    return true;
+                }
+
                 CompletedRequest completedResponse;
                 lock (CompletedResponses)
                 {

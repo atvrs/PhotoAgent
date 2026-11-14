@@ -62,6 +62,7 @@ try {
         previewWidth = 640; previewHeight = 480; captureTimeoutSec = 120
         logFileMaxMb = 1; logTotalMaxMb = 100
         archiveRetentionMonths = 60; archiveMaxGb = 100; alwaysOnTop = $true
+        transferRetentionMonths = 1; transferMaxMb = 100
         camera1Name = 'test face'; camera2Name = 'test document'
         lomoCameraId = 'installer-test-face'; documentCameraId = 'installer-test-document'
     } | ConvertTo-Json))
@@ -83,7 +84,7 @@ try {
         'LICENSE.txt', 'THIRD_PARTY_NOTICES.txt', 'licenses\lgpl-3.0.txt', 'licenses\gpl-3.0.txt', 'PROTOCOL_RU.md') {
         Assert-Installer (Test-Path (Join-Path $installDir $file)) "Installed file: $file"
     }
-    Assert-Installer ([Diagnostics.FileVersionInfo]::GetVersionInfo($installedExe).FileVersion -eq '1.3.0.0') 'Installed executable has expected version'
+    Assert-Installer ([Diagnostics.FileVersionInfo]::GetVersionInfo($installedExe).FileVersion -eq '1.4.0.0') 'Installed executable has expected version'
     $expectedRun = '"' + $installedExe + '"'
     Assert-Installer ((Get-ItemPropertyValue $runKey PhotoAgent) -eq $expectedRun) 'Autostart uses quoted installed path'
     $shortcuts = @(

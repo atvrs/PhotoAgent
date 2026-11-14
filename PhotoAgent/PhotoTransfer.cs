@@ -26,10 +26,12 @@ namespace PhotoAgent
         private readonly CaptureCommand command;
         private readonly string responsesFolder;
         private readonly string transferFolder;
+        private readonly string dataRoot;
         private readonly Timer retryTimer;
         private readonly List<ReadyPhoto> photos = new List<ReadyPhoto>();
         private readonly Queue<ReadyPhoto> pending = new Queue<ReadyPhoto>();
         private string lastPublishError;
+        private bool disposed;
 
         public IList<ReadyPhoto> Photos { get { return photos.AsReadOnly(); } }
 
@@ -37,7 +39,9 @@ namespace PhotoAgent
         {
             this.command = command;
             this.responsesFolder = responsesFolder;
+            this.dataRoot = dataRoot;
             transferFolder = Path.Combine(dataRoot, "transfer", command.request_id);
+            TransferCache.Pin(dataRoot, command.request_id);
             retryTimer = new Timer { Interval = 500 };
             retryTimer.Tick += delegate { TryFlush(); };
             retryTimer.Start();
@@ -50,7 +54,9 @@ namespace PhotoAgent
             if (!Directory.Exists(transferFolder))
                 return false;
 
-            foreach (string receipt in Directory.GetFiles(transferFolder, "photo.*.json")
+            foreach (string receipt in Directory.GetFiles(transferFolder, "photo.*.json*")
+                .Where(path => path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+                    || path.EndsWith(".json.pending", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
             {
                 ReadyPhoto photo = new JavaScriptSerializer().Deserialize<ReadyPhoto>(
@@ -58,12 +64,16 @@ namespace PhotoAgent
                 if (photo == null || photo.status != "photo_ready"
                     || photo.request_id != command.request_id
                     || photo.document_number != command.document_number
-                    || photo.sequence != photos.Count + 1
                     || photo.file != Path.GetFileName(photo.file)
                     || string.IsNullOrWhiteSpace(photo.file)
                     || photo.relative_path != Path.Combine("transfer", command.request_id, photo.file))
                     throw new InvalidDataException("Повреждён журнал передачи фотографий");
 
+                if (receipt.EndsWith(".pending", StringComparison.OrdinalIgnoreCase)
+                    && !File.Exists(Path.Combine(transferFolder, photo.file)))
+                    continue;
+                if (photo.sequence != photos.Count + 1)
+                    throw new InvalidDataException("Повреждена последовательность передачи фотографий");
                 photos.Add(photo);
                 pending.Enqueue(photo);
             }
@@ -74,21 +84,6 @@ namespace PhotoAgent
         {
             int sequence = photos.Count + 1;
             string name = Path.GetFileName(savedFile);
-            Directory.CreateDirectory(transferFolder);
-            string destination = Path.Combine(transferFolder, name);
-            string temporaryFile = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                File.Copy(savedFile, temporaryFile, false);
-                // Move never replaces an earlier request's copy.
-                File.Move(temporaryFile, destination);
-            }
-            finally
-            {
-                if (File.Exists(temporaryFile))
-                    File.Delete(temporaryFile);
-            }
-
             var photo = new ReadyPhoto
             {
                 status = "photo_ready",
@@ -99,6 +94,8 @@ namespace PhotoAgent
                 file = name,
                 relative_path = Path.Combine("transfer", command.request_id, name)
             };
+            TransferCache.StorePhoto(dataRoot, command.request_id, savedFile, sequence,
+                new JavaScriptSerializer().Serialize(photo));
             photos.Add(photo);
             pending.Enqueue(photo);
             TryFlush();
@@ -130,7 +127,7 @@ namespace PhotoAgent
                 string json = new JavaScriptSerializer().Serialize(photo);
                 string suffix = "photo." + photo.sequence.ToString("D4") + ".json";
                 // Keep a durable local receipt before publishing the notification.
-                WriteJsonOnce(Path.Combine(transferFolder, suffix), json);
+                TransferCache.CommitReceipt(Path.Combine(transferFolder, suffix));
                 WriteJsonOnce(Path.Combine(responsesFolder, command.request_id + "." + suffix), json);
                 pending.Dequeue();
                 LogManager.Write("Photo ready: " + command.request_id + " #" + photo.sequence);
@@ -157,8 +154,11 @@ namespace PhotoAgent
 
         public void Dispose()
         {
+            if (disposed) return;
+            disposed = true;
             retryTimer.Stop();
             retryTimer.Dispose();
+            TransferCache.Unpin(dataRoot, command.request_id);
         }
     }
 }

@@ -29,6 +29,9 @@ jobs:
       - name: Exercise archive retention and config migration
         shell: powershell
         run: ./tests/Run-ArchiveTests.ps1
+      - name: Exercise transfer age, size, slow readers and quota admission
+        shell: powershell
+        run: ./tests/Run-TransferCacheTests.ps1
       - name: Exercise missing-camera windows and reconnection
         timeout-minutes: 3
         shell: powershell

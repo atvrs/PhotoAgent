@@ -22,6 +22,9 @@ internal static class ArchiveTests
             Run("Negative months safely defaults to sixty", env => InvalidConfig(env, -1));
             Run("Text months safely defaults to sixty", env => InvalidConfig(env, "wrong"));
             Run("Fractional months safely defaults to sixty", env => InvalidConfig(env, 1.5));
+            Run("Missing transfer limits migrate to one month and one hundred MB", TransferDefaults);
+            Run("Explicit transfer limits are preserved", TransferCustom);
+            Run("Invalid transfer limits safely normalize", TransferInvalid);
             Run("Five-year boundary uses folder month rather than filesystem dates", FiveYears);
             Run("One month retains the current month and preserves future folders", OneMonth);
             Run("Custom depth crosses a year boundary", CustomMonths);
@@ -78,7 +81,8 @@ internal static class ArchiveTests
 
     private static void CustomConfig(Environment env)
     {
-        string json = "{ \"archiveRetentionMonths\": 24, \"archiveMaxGb\": 100 }";
+        string json = "{ \"archiveRetentionMonths\": 24, \"archiveMaxGb\": 100,"
+            + " \"transferRetentionMonths\": 1, \"transferMaxMb\": 100 }";
         File.WriteAllText(env.ConfigFile, json);
         ConfigManager.Load(env.ConfigFile);
         Assert(ConfigManager.Current.archiveRetentionMonths == 24, "Custom monthly depth changed");
@@ -102,6 +106,31 @@ internal static class ArchiveTests
         ConfigManager.Load(env.ConfigFile);
         Assert(ConfigManager.Current.archiveRetentionMonths == 60, "Unsafe retention was accepted");
         Assert(ConfigManager.Current.lomoCameraId == "keep", "Normalization lost another field");
+    }
+
+    private static void TransferDefaults(Environment env)
+    {
+        File.WriteAllText(env.ConfigFile, "{\"archiveRetentionMonths\":60,\"documentCameraId\":\"keep\"}");
+        ConfigManager.Load(env.ConfigFile);
+        Assert(ConfigManager.Current.transferRetentionMonths == 1
+            && ConfigManager.Current.transferMaxMb == 100, "Transfer defaults are missing");
+        Assert(ConfigManager.Current.documentCameraId == "keep", "Migration changed a camera");
+    }
+
+    private static void TransferCustom(Environment env)
+    {
+        File.WriteAllText(env.ConfigFile, "{\"archiveRetentionMonths\":60,\"transferRetentionMonths\":2,\"transferMaxMb\":50.5}");
+        ConfigManager.Load(env.ConfigFile);
+        Assert(ConfigManager.Current.transferRetentionMonths == 2
+            && ConfigManager.Current.transferMaxMb == 50.5, "Explicit transfer limits changed");
+    }
+
+    private static void TransferInvalid(Environment env)
+    {
+        File.WriteAllText(env.ConfigFile, "{\"archiveRetentionMonths\":60,\"transferRetentionMonths\":0,\"transferMaxMb\":\"bad\"}");
+        ConfigManager.Load(env.ConfigFile);
+        Assert(ConfigManager.Current.transferRetentionMonths == 1
+            && ConfigManager.Current.transferMaxMb == 100, "Invalid transfer limits disabled cleanup");
     }
 
     private static void FiveYears(Environment env)

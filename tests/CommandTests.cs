@@ -37,6 +37,8 @@ internal static class CommandTests
             Run("Interrupted photo transfer recovers without recapturing", InterruptedTransfer);
             Run("Replaying done does not republish an acknowledged photo", PhotoReplay);
             Run("Corrupt transfer receipts cannot announce an arbitrary path", InvalidReceipt);
+            Run("Expired transfer request returns an error without recapturing", ExpiredTransfer);
+            Run("Eviction overrides a cached result without resurrecting old files", ExpiredReplay);
             Run("Capture gate admits only one concurrent caller", CaptureGate);
             Run("Disposal stops the polling timer", Disposal);
             Console.WriteLine("PASS: " + passed + " command regression tests");
@@ -374,6 +376,37 @@ internal static class CommandTests
             "Unvalidated receipt was published");
     }
 
+    private static void ExpiredTransfer(TestEnvironment env)
+    {
+        File.WriteAllText(TransferCache.ExpiredNotice(env.DataRoot, "expired"), "{}");
+        env.Write("expired");
+        env.ScanTwice();
+        Assert(env.Captures == 0 && env.Status("expired") == "error",
+            "Expired request reached a camera");
+        Assert(File.ReadAllText(env.ResponsePath("expired")).Contains("transfer_cache_expired"),
+            "Expired transfer error code is missing");
+    }
+
+    private static void ExpiredReplay(TestEnvironment env)
+    {
+        const string id = "evicted";
+        env.OnCapture = delegate
+        {
+            CaptureWorkflow.PhotoReady(env.SavedPhoto(), "lomo");
+            return new CaptureResult { Success = true };
+        };
+        env.Write(id); env.ScanTwice();
+        string folder = Path.Combine(env.DataRoot, "transfer", id);
+        foreach (string file in Directory.GetFiles(folder))
+            File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddMonths(-2));
+        TransferCache.RunMaintenance(env.DataRoot, ConfigManager.Current, DateTime.UtcNow);
+        Assert(!Directory.Exists(folder), "Old transfer was not evicted");
+        File.Delete(env.ResponsePath(id));
+        env.Write(id); env.ScanTwice();
+        Assert(env.Captures == 1 && env.Status(id) == "error", "Eviction replay recaptured");
+        Assert(!Directory.Exists(folder), "Eviction replay recreated the old transfer folder");
+    }
+
     private static void Disposal(TestEnvironment env)
     {
         env.Watcher.Start();
@@ -471,6 +504,11 @@ internal static class CommandTests
 // Replace only physical capture and logging. Compile the production command transport unchanged.
 namespace PhotoAgent
 {
+    internal static class ConfigManager
+    {
+        internal static Config Current = new Config();
+    }
+
     internal static class CaptureWorkflow
     {
         public static Func<CaptureResult> OnCapture;

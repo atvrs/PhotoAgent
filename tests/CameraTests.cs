@@ -72,6 +72,7 @@ internal static class CameraTests
             Run("A slow reader survives a new capture of the same document", SlowPhotoReader);
             Run("Pending photo notifications retry while the next camera is missing", RetryWhileWaiting);
             Run("Extra photo storage failure returns an error without crashing", ExtraStorageFailure);
+            Run("Quota rejection preserves the first ready photo and fails the series", QuotaDuringCapture);
             Console.WriteLine("PASS: " + passed + " camera regression tests");
     }
 
@@ -545,6 +546,31 @@ internal static class CameraTests
         Assert(env.Status() == "error", "Extra storage failure did not return an error");
         Assert((int)env.Response()["photo_count"] == 0, "A failed snapshot was announced");
         Assert(!CaptureState.IsBusy, "Storage failure left capture busy");
+    }
+
+    private static void QuotaDuringCapture(TestEnvironment env)
+    {
+        CameraManager.Connected.Add("face");
+        CameraManager.Connected.Add("document");
+        bool limited = false;
+        env.Process(false, form =>
+        {
+            if (Preview(form).IsWaitingForCamera) return;
+            if (form.Text == "Паспорт")
+            {
+                string folder = Path.Combine(PhotoTransfer.DataRoot, "transfer", env.Request);
+                long bytes = Directory.GetFiles(folder).Sum(path => new FileInfo(path).Length);
+                ConfigManager.Current.transferMaxMb = (bytes + 1) / (1024d * 1024d);
+                limited = true;
+            }
+            PressKey(form, Keys.Space);
+        });
+        Assert(limited && env.Status() == "error", "Quota rejection returned success");
+        Assert((int)env.Response()["photo_count"] == 1, "Ready photo was lost on quota rejection");
+        AssertReadablePhoto(env.Notifications().Single());
+        Assert(!File.Exists(TransferCache.ExpiredNotice(PhotoTransfer.DataRoot, env.Request)),
+            "Active capture was evicted to make room for itself");
+        Assert(!CaptureState.IsBusy, "Quota rejection left the capture gate busy");
     }
 
     private static void AssertReadablePhoto(ReadyPhoto photo)
