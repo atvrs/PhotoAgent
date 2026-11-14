@@ -2,6 +2,13 @@
 {
     public class Config
     {
+        public const int DefaultArchiveRetentionMonths = 60;
+
+        public Config()
+        {
+            archiveRetentionMonths = DefaultArchiveRetentionMonths;
+        }
+
         public int previewWidth { get; set; }
         public int previewHeight { get; set; }
 
@@ -10,7 +17,7 @@
         public double logFileMaxMb { get; set; }
         public double logTotalMaxMb { get; set; }
 
-        public int archiveRetentionDays { get; set; }
+        public int archiveRetentionMonths { get; set; }
         public double archiveMaxGb { get; set; }
 
         public bool alwaysOnTop { get; set; }

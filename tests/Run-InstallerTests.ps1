@@ -1,12 +1,15 @@
 # This destructive lifecycle test belongs only on a disposable GitHub runner.
+param([switch]$WithoutNet)
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true') {
     throw 'Installer lifecycle tests may run only on a disposable GitHub Actions runner.'
 }
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$setups = @(Get-ChildItem (Join-Path $repoRoot 'installer\output\PhotoAgent_Setup_*.exe'))
-if ($setups.Count -ne 1) { throw 'Expected exactly one full installer.' }
+$output = if ($WithoutNet) { 'installer\output-lite' } else { 'installer\output' }
+$setups = @(Get-ChildItem (Join-Path $repoRoot "$output\PhotoAgent_Setup_*.exe"))
+if ($setups.Count -ne 1) { throw 'Expected exactly one installer for the selected variant.' }
 $setup = $setups[0]
 $installDir = Join-Path $env:LOCALAPPDATA 'Programs\PhotoAgent Installer Test'
 $installedExe = Join-Path $installDir 'PhotoAgent.exe'
@@ -48,12 +51,17 @@ function Assert-DataPreserved {
 }
 
 try {
+    if ($WithoutNet) {
+        Assert-Installer ($setup.Length -lt 10MB) 'Lite installer contains no large .NET redistributable'
+        $info = Get-Content (Join-Path $repoRoot "$output\BUILD_INFO.txt") -Raw
+        Assert-Installer ($info.Contains('Microsoft .NET Framework: not bundled')) 'Lite package declares its external .NET prerequisite'
+    }
     New-Item -ItemType Directory -Force (Split-Path $photo -Parent) | Out-Null
     New-Item -ItemType Directory -Force (Split-Path $transferPhoto -Parent) | Out-Null
     [IO.File]::WriteAllText($configPath, (@{
         previewWidth = 640; previewHeight = 480; captureTimeoutSec = 120
         logFileMaxMb = 1; logTotalMaxMb = 100
-        archiveRetentionDays = 365; archiveMaxGb = 100; alwaysOnTop = $true
+        archiveRetentionMonths = 60; archiveMaxGb = 100; alwaysOnTop = $true
         camera1Name = 'test face'; camera2Name = 'test document'
         lomoCameraId = 'installer-test-face'; documentCameraId = 'installer-test-document'
     } | ConvertTo-Json))
@@ -75,7 +83,7 @@ try {
         'LICENSE.txt', 'THIRD_PARTY_NOTICES.txt', 'licenses\lgpl-3.0.txt', 'licenses\gpl-3.0.txt', 'PROTOCOL_RU.md') {
         Assert-Installer (Test-Path (Join-Path $installDir $file)) "Installed file: $file"
     }
-    Assert-Installer ([Diagnostics.FileVersionInfo]::GetVersionInfo($installedExe).FileVersion -eq '1.2.0.0') 'Installed executable has expected version'
+    Assert-Installer ([Diagnostics.FileVersionInfo]::GetVersionInfo($installedExe).FileVersion -eq '1.3.0.0') 'Installed executable has expected version'
     $expectedRun = '"' + $installedExe + '"'
     Assert-Installer ((Get-ItemPropertyValue $runKey PhotoAgent) -eq $expectedRun) 'Autostart uses quoted installed path'
     $shortcuts = @(

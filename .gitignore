@@ -364,4 +364,5 @@ FodyWeavers.xsd
 
 # Reproducible installer output and downloaded Microsoft prerequisite
 installer/output/
+installer/output-lite/
 installer/prerequisites/

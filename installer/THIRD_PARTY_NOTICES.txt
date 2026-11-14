@@ -17,6 +17,7 @@ to modify these libraries or debug those modifications.
 
 Microsoft .NET Framework 4.8 offline redistributable
 Copyright Microsoft Corporation. Licensed under Microsoft's own license terms.
-The signed Microsoft installer is embedded unchanged and runs only if .NET 4.8
-or a later compatible .NET Framework runtime is absent.
+The full package embeds the signed Microsoft installer unchanged and runs it
+only if .NET 4.8 or a later compatible .NET Framework runtime is absent.
+The Lite package does not include or download the .NET runtime.
 https://dotnet.microsoft.com/download/dotnet-framework/thank-you/net48-offline-installer

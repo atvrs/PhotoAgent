@@ -1,4 +1,4 @@
-name: Windows build, tests and offline installer
+name: Windows build, tests and Lite installer
 
 on:
   push:
@@ -24,23 +24,26 @@ jobs:
       - name: Exercise file command handling
         shell: powershell
         run: ./tests/Run-CommandTests.ps1
+      - name: Exercise archive retention and config migration
+        shell: powershell
+        run: ./tests/Run-ArchiveTests.ps1
       - name: Exercise missing-camera windows and reconnection
         timeout-minutes: 3
         shell: powershell
         run: ./tests/Run-CameraTests.ps1
-      - name: Build full offline installer
+      - name: Build lightweight installer without .NET
         timeout-minutes: 6
         shell: powershell
-        run: ./installer/Build-Installer.ps1
+        run: ./installer/Build-Installer.ps1 -WithoutNet
       - name: Exercise installation, upgrade and removal
         timeout-minutes: 4
         shell: powershell
-        run: ./tests/Run-InstallerTests.ps1
-      - name: Upload full offline installation package
+        run: ./tests/Run-InstallerTests.ps1 -WithoutNet
+      - name: Upload lightweight installation package
         uses: actions/upload-artifact@v4
         with:
-          name: PhotoAgent-Full-Setup
-          path: installer/output/
+          name: PhotoAgent-Lite-Setup
+          path: installer/output-lite/
           compression-level: 0
           if-no-files-found: error
       - name: Upload installer diagnostics

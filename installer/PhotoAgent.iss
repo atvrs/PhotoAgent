@@ -1,6 +1,15 @@
 ﻿#ifndef AppVersion
   #error AppVersion must be supplied by Build-Installer.ps1
 #endif
+#ifdef WithoutNet
+  #define PackageSuffix "_Lite"
+  #define PackageOutput "output-lite"
+  #define InstallGuide "INSTALL_LITE_RU.md"
+#else
+  #define PackageSuffix ""
+  #define PackageOutput "output"
+  #define InstallGuide "INSTALL_RU.md"
+#endif
 
 [Setup]
 AppId={{CC3D58B1-5F24-4BFB-8D51-44C7DEB8704C}
@@ -18,8 +27,8 @@ CloseApplications=yes
 RestartApplications=no
 SetupIconFile=..\PhotoAgent\photoagent.ico
 UninstallDisplayIcon={app}\PhotoAgent.exe
-OutputDir=output
-OutputBaseFilename=PhotoAgent_Setup_{#AppVersion}
+OutputDir={#PackageOutput}
+OutputBaseFilename=PhotoAgent_Setup_{#AppVersion}{#PackageSuffix}
 Compression=lzma2/normal
 SolidCompression=yes
 WizardStyle=modern
@@ -49,12 +58,14 @@ Source: "..\PhotoAgent\bin\Release\AForge.dll"; DestDir: "{app}"; Flags: ignorev
 Source: "..\PhotoAgent\bin\Release\AForge.Video.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\PhotoAgent\bin\Release\AForge.Video.DirectShow.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\PhotoAgent\photoagent.ico"; DestDir: "{app}"; Flags: ignoreversion
-Source: "INSTALL_RU.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#InstallGuide}"; DestDir: "{app}"; DestName: "INSTALL_RU.md"; Flags: ignoreversion
 Source: "..\README.MD"; DestDir: "{app}"; DestName: "PROTOCOL_RU.md"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "licenses\*.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+#ifndef WithoutNet
 Source: "prerequisites\NDP48-x86-x64-AllOS-ENU.exe"; Flags: dontcopy nocompression
+#endif
 
 [Icons]
 Name: "{group}\PhotoAgent"; Filename: "{app}\PhotoAgent.exe"; WorkingDir: "{app}"
@@ -94,6 +105,13 @@ var
   I: Integer;
 begin
   Result := '';
+#ifdef WithoutNet
+  if not HasNet48 then
+  begin
+    Result := 'Требуется Microsoft .NET Framework 4.8 или новее. Облегчённый пакет не содержит .NET. Установите его отдельно и повторите установку PhotoAgent.';
+    Exit;
+  end;
+#endif
   { Check the fixed 1C exchange directory before installing prerequisites.
     Never change ACLs or overwrite an existing camera configuration. }
   SetArrayLength(Folders, 7);
@@ -124,6 +142,7 @@ begin
   if HasNet48 then
     Exit;
 
+#ifndef WithoutNet
   ExtractTemporaryFile('NDP48-x86-x64-AllOS-ENU.exe');
   if not ShellExec('runas', ExpandConstant('{tmp}\NDP48-x86-x64-AllOS-ENU.exe'),
     '/passive /norestart', '', SW_SHOWNORMAL, ewWaitUntilTerminated, Code) then
@@ -145,6 +164,7 @@ begin
     NeedsRestart := PrerequisiteNeedsRestart;
     Result := '.NET Framework 4.8 ещё недоступен. Перезагрузите Windows и повторно запустите установщик PhotoAgent.';
   end;
+#endif
 end;
 
 function NeedRestart: Boolean;
