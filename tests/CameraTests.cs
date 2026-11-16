@@ -73,6 +73,15 @@ internal static class CameraTests
             Run("Pending photo notifications retry while the next camera is missing", RetryWhileWaiting);
             Run("Extra photo storage failure returns an error without crashing", ExtraStorageFailure);
             Run("Quota rejection preserves the first ready photo and fails the series", QuotaDuringCapture);
+            Run("Recapture face opens only the face stage and updates one photograph", env => Recapture(env, "lomo", false));
+            Run("Recapture passport opens only the passport stage and updates one photograph", env => Recapture(env, "passport", false));
+            Run("Recapture registration opens only the registration stage and updates one photograph", env => Recapture(env, "registration", false));
+            Run("Recapture waits for the assigned camera and resumes the same request", env => Recapture(env, "passport", true));
+            Run("Closing ready recapture preserves all old photos and returns zero photos", env => CancelRecapture(env, true));
+            Run("Closing missing-camera recapture preserves old photos and returns zero photos", env => CancelRecapture(env, false));
+            Run("Recapture keeps a previous request JPEG immutable for a slow reader", RecaptureSlowReader);
+            Run("Recapture quota failure preserves the previous working and archive photo", RecaptureQuota);
+            Run("A recapture request receives busy during another capture", env => BusyWhileWaiting(env, true));
             Console.WriteLine("PASS: " + passed + " camera regression tests");
     }
 
@@ -269,12 +278,18 @@ internal static class CameraTests
 
     private static void BusyWhileWaiting(TestEnvironment env)
     {
+        BusyWhileWaiting(env, false);
+    }
+
+    private static void BusyWhileWaiting(TestEnvironment env, bool recapture)
+    {
         env.Process(false, form =>
         {
             string otherFile = Path.Combine(env.Root, "other.json");
             File.WriteAllText(otherFile, new JavaScriptSerializer().Serialize(new
             {
-                command = "capture_document", request_id = "other", document_number = env.Document
+                command = recapture ? "recapture_photo" : "capture_document",
+                photo_type = "passport", request_id = "other", document_number = env.Document
             }));
             Assert(CommandProcessor.Process(otherFile, env.Responses), "Busy request was not consumed");
             string json = File.ReadAllText(Path.Combine(env.Responses, "other.done"));
@@ -580,6 +595,128 @@ internal static class CameraTests
             Assert(image.Width > 0 && image.Height > 0, "Announced JPEG is incomplete");
     }
 
+    private static void SeedRecapture(TestEnvironment env)
+    {
+        Directory.CreateDirectory(env.Photos);
+        Directory.CreateDirectory(env.Archive);
+        foreach (string type in new[] { "lomo", "passport", "registration" })
+        {
+            string name = env.Document + "_" + type + ".jpg";
+            File.WriteAllText(Path.Combine(env.Photos, name), "old " + type);
+            File.WriteAllText(Path.Combine(env.Archive, name), "old archive " + type);
+        }
+        File.WriteAllText(Path.Combine(env.Archive, "archive-only.jpg"), "keep archive-only");
+    }
+
+    private static void Recapture(TestEnvironment env, string type, bool reconnect)
+    {
+        SeedRecapture(env);
+        string camera = type == "lomo" ? "face" : "document";
+        string title = type == "lomo" ? "Ломосдатчик" : type == "passport" ? "Паспорт" : "Прописка";
+        if (!reconnect) CameraManager.Connected.Add(camera);
+        var waiting = Stopwatch.StartNew();
+        var windows = new HashSet<Form>();
+        env.Process("recapture_photo", type, form =>
+        {
+            windows.Add(form);
+            Assert(form.Text == title, "Recapture opened an unrelated stage");
+            if (Preview(form).IsWaitingForCamera)
+            {
+                Assert(Placeholder(Preview(form)), "Recapture did not display missing-camera text");
+                Assert(CaptureState.IsWaitingForCamera && !CaptureState.IsTimeoutDue(1),
+                    "Missing recapture camera consumed the timeout");
+                if (reconnect && waiting.ElapsedMilliseconds > 1400) CameraManager.Connected.Add(camera);
+                return;
+            }
+            PressKey(form, Keys.Space);
+        });
+        Assert(windows.Count == 1 && env.Status() == "ok", "Recapture did not finish after one window");
+        Assert(CameraManager.Devices.All(device => device.Source == camera), "Wrong assigned camera opened");
+        var photo = env.Notifications().Single();
+        string name = env.Document + "_" + type + ".jpg";
+        Assert(photo.sequence == 1 && photo.photo_type == type && photo.file == name
+            && photo.request_id == env.Request && photo.document_number == env.Document
+            && photo.relative_path == Path.Combine("transfer", env.Request, name),
+            "Recapture notification changed the 1.4.1 protocol");
+        AssertReadablePhoto(photo);
+        byte[] jpeg = File.ReadAllBytes(Path.Combine(PhotoTransfer.DataRoot, photo.relative_path));
+        Assert(jpeg.SequenceEqual(File.ReadAllBytes(Path.Combine(env.Photos, name)))
+            && jpeg.SequenceEqual(File.ReadAllBytes(Path.Combine(env.Archive, name))),
+            "Working, transfer and archive photographs differ");
+        foreach (string other in new[] { "lomo", "passport", "registration" }.Where(value => value != type))
+        {
+            Assert(File.ReadAllText(Path.Combine(env.Photos, env.Document + "_" + other + ".jpg")) == "old " + other,
+                "Recapture replaced an unrelated working photo");
+            Assert(File.ReadAllText(Path.Combine(env.Archive, env.Document + "_" + other + ".jpg")) == "old archive " + other,
+                "Recapture replaced an unrelated archive photo");
+        }
+        Assert(File.ReadAllText(Path.Combine(env.Archive, "archive-only.jpg")) == "keep archive-only",
+            "Recapture deleted an archive-only photograph");
+        var response = env.Response();
+        Assert((int)response["photo_count"] == 1
+            && ((System.Collections.ICollection)response["photos"]).Count == 1
+            && ((System.Collections.ICollection)response["files"]).Count == 1,
+            "Recapture final manifest must contain exactly one photo");
+    }
+
+    private static void CancelRecapture(TestEnvironment env, bool connected)
+    {
+        SeedRecapture(env);
+        if (connected) CameraManager.Connected.Add("document");
+        env.Process("recapture_photo", "registration", form =>
+        {
+            if (connected && Preview(form).IsWaitingForCamera) return;
+            form.Close();
+        });
+        env.AssertIncomplete();
+        Assert((int)env.Response()["photo_count"] == 0 && env.Notifications().Count == 0,
+            "Cancelled recapture announced a photograph");
+        Assert(File.ReadAllText(Path.Combine(env.Photos, env.Document + "_registration.jpg")) == "old registration"
+            && File.ReadAllText(Path.Combine(env.Archive, env.Document + "_registration.jpg")) == "old archive registration",
+            "Cancelled recapture changed old photographs");
+    }
+
+    private static void RecaptureSlowReader(TestEnvironment env)
+    {
+        CameraManager.Connected.Add("document");
+        Action<Form> capture = form =>
+        {
+            if (!Preview(form).IsWaitingForCamera) PressKey(form, Keys.Space);
+        };
+        env.Process("recapture_photo", "passport", capture);
+        ReadyPhoto old = env.Notifications().Single();
+        string path = Path.Combine(PhotoTransfer.DataRoot, old.relative_path);
+        byte[] original = File.ReadAllBytes(path);
+        using (var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            env.Request = Guid.NewGuid().ToString("N");
+            env.Process("recapture_photo", "passport", capture);
+            Assert(env.Status() == "ok" && env.Notifications().Single().relative_path != old.relative_path,
+                "Recapture reused the preceding request's JPEG");
+            using (var copied = new MemoryStream())
+            {
+                reader.CopyTo(copied);
+                Assert(original.SequenceEqual(copied.ToArray()), "Recapture changed a JPEG being read by 1C");
+            }
+        }
+    }
+
+    private static void RecaptureQuota(TestEnvironment env)
+    {
+        SeedRecapture(env);
+        CameraManager.Connected.Add("document");
+        ConfigManager.Current.transferMaxMb = 1d / (1024d * 1024d);
+        env.Process("recapture_photo", "passport", form =>
+        {
+            if (!Preview(form).IsWaitingForCamera) PressKey(form, Keys.Space);
+        });
+        Assert(env.Status() == "error" && (int)env.Response()["photo_count"] == 0,
+            "Rejected recapture transfer was reported ready");
+        Assert(File.ReadAllText(Path.Combine(env.Photos, env.Document + "_passport.jpg")) == "old passport"
+            && File.ReadAllText(Path.Combine(env.Archive, env.Document + "_passport.jpg")) == "old archive passport",
+            "Quota failure destroyed the previous photograph");
+    }
+
     private static CameraPreviewControl Preview(Form form)
     {
         return form.Controls.OfType<CameraPreviewControl>().Single();
@@ -606,10 +743,11 @@ internal static class CameraTests
     private sealed class TestEnvironment : IDisposable
     {
         public string Request = Guid.NewGuid().ToString("N");
-        public readonly string Document = "CAMERA_TEST_" + Guid.NewGuid().ToString("N");
+        public readonly string Document = "ям0190_CAMERA_TEST_" + Guid.NewGuid().ToString("N");
         public readonly string Root = Path.Combine(Path.GetTempPath(), "PhotoAgentCamera_" + Guid.NewGuid().ToString("N"));
         public string Responses { get { return Path.Combine(Root, "responses"); } }
         public string Photos { get { return Path.Combine(@"C:\psa_photos\photos", Document); } }
+        public string Archive { get { return Path.Combine(ArchiveManager.GetMonthFolder(), Document); } }
         private readonly HashSet<string> requests = new HashSet<string>();
 
         public TestEnvironment()
@@ -624,11 +762,16 @@ internal static class CameraTests
 
         public void Process(bool extra, Action<Form> drive)
         {
+            Process(extra ? "capture_extra" : "capture_document", null, drive);
+        }
+
+        public void Process(string command, string photoType, Action<Form> drive)
+        {
             requests.Add(Request);
             string commandFile = Path.Combine(Root, "command.json");
             File.WriteAllText(commandFile, new JavaScriptSerializer().Serialize(new
             {
-                command = extra ? "capture_extra" : "capture_document",
+                command = command, photo_type = photoType,
                 request_id = Request, document_number = Document
             }));
             Exception failure = null;
@@ -709,6 +852,8 @@ internal static class CameraTests
             Directory.Delete(Root, true);
             if (Directory.Exists(Photos))
                 Directory.Delete(Photos, true);
+            if (Directory.Exists(Archive))
+                Directory.Delete(Archive, true);
             foreach (string request in requests)
             {
                 string transfer = Path.Combine(PhotoTransfer.DataRoot, "transfer", request);
@@ -792,6 +937,5 @@ namespace PhotoAgent
     }
 
     internal static class ConfigManager { public static Config Current; }
-    internal static class ArchiveManager { public static void ArchiveDocument(string document) { } }
     internal static class LogManager { public static void Write(string message) { Console.WriteLine(message); } }
 }

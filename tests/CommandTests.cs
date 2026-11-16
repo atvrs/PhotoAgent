@@ -32,6 +32,12 @@ internal static class CommandTests
             Run("Timeout cannot return a successful response", Timeout);
             Run("Invalid JSON and unsafe names stay pending", InvalidCommands);
             Run("Unknown command returns an error", UnknownCommand);
+            Run("Recapture without photo_type returns an immediate error", env => InvalidRecapture(env, null));
+            Run("Recapture rejects an empty photo_type", env => InvalidRecapture(env, ""));
+            Run("Recapture rejects extra photo_type", env => InvalidRecapture(env, "extra"));
+            Run("Recapture photo_type is case sensitive", env => InvalidRecapture(env, "Passport"));
+            Run("Recapture rejects an unsafe photo_type", env => InvalidRecapture(env, "../passport"));
+            Run("Invalid recapture does not disturb an active capture", InvalidRecaptureWhileBusy);
             Run("Photo notification failure delays done and retries without recapture", env => PhotoPublishRetry(env, false));
             Run("Photo receipt is durable before its notification is published", env => PhotoPublishRetry(env, true));
             Run("Interrupted photo transfer recovers without recapturing", InterruptedTransfer);
@@ -289,6 +295,34 @@ internal static class CommandTests
         CaptureState.End();
     }
 
+    private static void InvalidRecapture(TestEnvironment env, string photoType)
+    {
+        var command = new Dictionary<string, object> {
+            { "command", "recapture_photo" }, { "request_id", "invalid-recapture" },
+            { "document_number", "TEST_DOC" }
+        };
+        if (photoType != null) command["photo_type"] = photoType;
+        File.WriteAllText(env.CommandPath("invalid-recapture"), new JavaScriptSerializer().Serialize(command));
+        env.ScanTwice();
+        var response = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+            File.ReadAllText(env.ResponsePath("invalid-recapture")));
+        Assert((string)response["status"] == "error" && env.Captures == 0,
+            "Invalid recapture was not rejected before opening a camera");
+        Assert(((string)response["message"]).Contains("photo_type"), "Validation message is unclear");
+        Assert((int)response["photo_count"] == 0
+            && ((System.Collections.ICollection)response["photos"]).Count == 0,
+            "Invalid recapture announced a photograph");
+    }
+
+    private static void InvalidRecaptureWhileBusy(TestEnvironment env)
+    {
+        Assert(CaptureState.TryBegin("active"), "Test could not acquire capture gate");
+        InvalidRecapture(env, "extra");
+        Assert(CaptureState.IsBusy && CaptureState.RequestId == "active",
+            "Validation released another request's capture gate");
+        CaptureState.End();
+    }
+
     private static void PhotoPublishRetry(TestEnvironment env, bool blockReceipt)
     {
         const string id = "photo-retry";
@@ -519,6 +553,11 @@ namespace PhotoAgent
             return OnCapture();
         }
         public static CaptureResult CaptureExtra(CaptureCommand command, Action<string, string> ready)
+        {
+            PhotoReady = ready;
+            return OnCapture();
+        }
+        public static CaptureResult RecapturePhoto(CaptureCommand command, Action<string, string> ready)
         {
             PhotoReady = ready;
             return OnCapture();

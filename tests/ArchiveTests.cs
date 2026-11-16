@@ -15,6 +15,7 @@ internal static class ArchiveTests
         try
         {
             Run("New configuration retains sixty months", Defaults);
+            Run("Recapture updates only the selected archive photo", ArchiveSinglePhoto);
             Run("Legacy days migrate to sixty months with backup and camera IDs preserved", Legacy);
             Run("Explicit monthly depth is preserved without rewriting configuration", CustomConfig);
             Run("Monthly setting wins over legacy days", BothSettings);
@@ -58,6 +59,7 @@ internal static class ArchiveTests
     {
         ConfigManager.Load(env.ConfigFile);
         Assert(ConfigManager.Current.archiveRetentionMonths == 60, "Default is not five years");
+        Assert(ConfigManager.Current.captureTimeoutSec == 300, "New capture timeout must be five minutes");
         var json = ReadConfig(env);
         Assert((int)json["archiveRetentionMonths"] == 60, "Monthly setting missing from new file");
         Assert(!json.ContainsKey("archiveRetentionDays"), "Obsolete day setting remains");
@@ -77,6 +79,23 @@ internal static class ArchiveTests
         Assert(!json.ContainsKey("archiveRetentionDays"), "Day setting was not removed");
         Assert(File.ReadAllText(env.ConfigFile + ".bak") == original, "Original backup differs");
         Assert(Directory.GetFiles(env.Root, "*.tmp").Length == 0, "Configuration temp file leaked");
+    }
+
+    private static void ArchiveSinglePhoto(Environment env)
+    {
+        string folder = Path.Combine(env.Archive, "2026-11", "ям0190");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "ям0190_lomo.jpg"), "keep face");
+        File.WriteAllText(Path.Combine(folder, "ям0190_passport.jpg"), "old passport");
+        File.WriteAllText(Path.Combine(folder, "archive-only.jpg"), "keep archive-only photo");
+        string source = Path.Combine(env.Root, "ям0190_passport.jpg");
+        File.WriteAllText(source, "new passport");
+        ArchiveManager.ArchivePhoto("ям0190", source, env.Archive, Now);
+        Assert(File.ReadAllText(Path.Combine(folder, "ям0190_passport.jpg")) == "new passport",
+            "Selected archive photograph was not replaced");
+        Assert(File.ReadAllText(Path.Combine(folder, "ям0190_lomo.jpg")) == "keep face"
+            && File.ReadAllText(Path.Combine(folder, "archive-only.jpg")) == "keep archive-only photo",
+            "Recapture changed unrelated archive photographs");
     }
 
     private static void CustomConfig(Environment env)

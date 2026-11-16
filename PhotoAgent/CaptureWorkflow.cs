@@ -7,6 +7,69 @@ namespace PhotoAgent
 {
     public static class CaptureWorkflow
     {
+        public static CaptureResult RecapturePhoto(CaptureCommand cmd)
+        {
+            return RecapturePhoto(cmd, null);
+        }
+
+        internal static CaptureResult RecapturePhoto(
+            CaptureCommand cmd, Action<string, string> photoReady)
+        {
+            var result = new CaptureResult();
+            string stagingFolder = null;
+            try
+            {
+                if (!CaptureCommand.IsSupportedPhotoType(cmd.photo_type))
+                    throw new ArgumentException(CaptureCommand.InvalidPhotoTypeMessage);
+
+                string title = cmd.photo_type == "lomo" ? "Ломосдатчик"
+                    : cmd.photo_type == "passport" ? "Паспорт" : "Прописка";
+                string cameraId = cmd.photo_type == "lomo"
+                    ? ConfigManager.Current.lomoCameraId : ConfigManager.Current.documentCameraId;
+
+                using (var form = new CaptureForm(cameraId, title,
+                    "Пересъёмка: " + title + "\r\n\r\nДокумент: " + cmd.document_number))
+                {
+                    if (form.ShowDialog() != DialogResult.OK)
+                        return result;
+
+                    // Stage the named JPEG before replacing the legacy working copy.
+                    // A rejected transfer must not destroy the previous photograph.
+                    stagingFolder = Path.Combine(Path.GetTempPath(),
+                        "PhotoAgent_recapture_" + Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(stagingFolder);
+                    string fileName = cmd.document_number + "_" + cmd.photo_type + ".jpg";
+                    string stagedPhoto = Path.Combine(stagingFolder, fileName);
+                    form.CapturedImage.Save(stagedPhoto, ImageFormat.Jpeg);
+                    if (photoReady != null)
+                        photoReady(stagedPhoto, cmd.photo_type);
+
+                    string documentFolder = Path.Combine(@"C:\psa_photos\photos", cmd.document_number);
+                    Directory.CreateDirectory(documentFolder);
+                    string workingPhoto = Path.Combine(documentFolder, fileName);
+                    File.Copy(stagedPhoto, workingPhoto, true);
+                    ArchiveManager.ArchivePhoto(cmd.document_number, workingPhoto);
+                    LogManager.Write("Recaptured: " + workingPhoto);
+                    result.Files.Add(fileName);
+                    result.Success = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogManager.Write("RecapturePhoto error: " + ex.Message);
+                result.ErrorMessage = ex.Message;
+            }
+            finally
+            {
+                if (stagingFolder != null)
+                {
+                    try { Directory.Delete(stagingFolder, true); }
+                    catch (Exception ex) { LogManager.Write("Recapture staging cleanup: " + ex.Message); }
+                }
+            }
+            return result;
+        }
+
         public static CaptureResult CaptureDocument(CaptureCommand cmd)
         {
             return CaptureDocument(cmd, null);

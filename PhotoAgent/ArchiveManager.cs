@@ -9,6 +9,21 @@ namespace PhotoAgent
     {
         private const string ArchiveRoot = @"C:\psa_photos\archive";
 
+        public static void ArchivePhoto(string documentNumber, string sourceFile)
+        {
+            ArchivePhoto(documentNumber, sourceFile, ArchiveRoot, DateTime.Now);
+        }
+
+        internal static void ArchivePhoto(string documentNumber, string sourceFile,
+            string archiveRoot, DateTime now)
+        {
+            string folder = Path.Combine(archiveRoot,
+                now.ToString("yyyy-MM", CultureInfo.InvariantCulture), documentNumber);
+            Directory.CreateDirectory(folder);
+            File.Copy(sourceFile, Path.Combine(folder, Path.GetFileName(sourceFile)), true);
+            LogManager.Write("Archived photo: " + Path.GetFileName(sourceFile));
+        }
+
         public static void ArchiveDocument(string documentNumber)
         {
             string sourceFolder = Path.Combine(@"C:\psa_photos\photos", documentNumber);

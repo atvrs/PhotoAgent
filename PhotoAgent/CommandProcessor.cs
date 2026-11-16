@@ -68,6 +68,21 @@ namespace PhotoAgent
                     return true;
                 }
 
+                if (command.command == "recapture_photo"
+                    && !CaptureCommand.IsSupportedPhotoType(command.photo_type))
+                {
+                    PublishResponse(commandFile, responseFile, new JavaScriptSerializer().Serialize(new
+                    {
+                        status = "error",
+                        request_id = command.request_id,
+                        document_number = command.document_number,
+                        message = CaptureCommand.InvalidPhotoTypeMessage,
+                        photo_count = 0,
+                        photos = new ReadyPhoto[0]
+                    }));
+                    return true;
+                }
+
                 if (!CaptureState.TryBegin(command.request_id))
                 {
                     // A second file for the active request must wait for its real result.
@@ -102,6 +117,8 @@ namespace PhotoAgent
                             result = CaptureWorkflow.CaptureDocument(command, transfer.PhotoSaved);
                         else if (command.command == "capture_extra")
                             result = CaptureWorkflow.CaptureExtra(command, transfer.PhotoSaved);
+                        else if (command.command == "recapture_photo")
+                            result = CaptureWorkflow.RecapturePhoto(command, transfer.PhotoSaved);
                         else
                             throw new InvalidOperationException("Unknown command: " + command.command);
 
