@@ -186,7 +186,23 @@ namespace PhotoAgent
                     FileAccess.Read, FileShare.None))
                 using (var reader = new StreamReader(stream))
                 {
-                    command = new JavaScriptSerializer().Deserialize<CaptureCommand>(reader.ReadToEnd());
+                    var serializer = new JavaScriptSerializer();
+                    string json = reader.ReadToEnd();
+                    var values = serializer.Deserialize<Dictionary<string, object>>(json);
+                    object name;
+                    object photoType;
+                    if (values != null && values.TryGetValue("command", out name)
+                        && name as string == "recapture_photo"
+                        && values.TryGetValue("photo_type", out photoType)
+                        && !(photoType is string))
+                    {
+                        // Valid JSON with a wrong field type is a rejected request,
+                        // not a partially written command to retry forever.
+                        values["photo_type"] = null;
+                        command = serializer.ConvertToType<CaptureCommand>(values);
+                    }
+                    else
+                        command = serializer.Deserialize<CaptureCommand>(json);
                 }
 
                 return command != null

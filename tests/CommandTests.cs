@@ -33,6 +33,8 @@ internal static class CommandTests
             Run("Invalid JSON and unsafe names stay pending", InvalidCommands);
             Run("Unknown command returns an error", UnknownCommand);
             Run("Recapture without photo_type returns an immediate error", env => InvalidRecapture(env, null));
+            Run("Recapture rejects explicit null photo_type", env => InvalidRecapture(env, null, true));
+            Run("Recapture rejects a non-text photo_type without leaving it pending", env => InvalidRecapture(env, new[] { "passport" }));
             Run("Recapture rejects an empty photo_type", env => InvalidRecapture(env, ""));
             Run("Recapture rejects extra photo_type", env => InvalidRecapture(env, "extra"));
             Run("Recapture photo_type is case sensitive", env => InvalidRecapture(env, "Passport"));
@@ -295,13 +297,13 @@ internal static class CommandTests
         CaptureState.End();
     }
 
-    private static void InvalidRecapture(TestEnvironment env, string photoType)
+    private static void InvalidRecapture(TestEnvironment env, object photoType, bool includeNull = false)
     {
         var command = new Dictionary<string, object> {
             { "command", "recapture_photo" }, { "request_id", "invalid-recapture" },
             { "document_number", "TEST_DOC" }
         };
-        if (photoType != null) command["photo_type"] = photoType;
+        if (photoType != null || includeNull) command["photo_type"] = photoType;
         File.WriteAllText(env.CommandPath("invalid-recapture"), new JavaScriptSerializer().Serialize(command));
         env.ScanTwice();
         var response = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
