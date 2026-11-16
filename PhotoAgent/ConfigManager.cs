@@ -133,7 +133,7 @@ namespace PhotoAgent
                     previewWidth = 640,
                     previewHeight = 480,
 
-                    captureTimeoutSec = 120,
+                    captureTimeoutSec = 300,
 
                     logFileMaxMb = 1,
                     logTotalMaxMb = 100,
