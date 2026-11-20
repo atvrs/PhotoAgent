@@ -12,29 +12,16 @@ namespace PhotoAgent
         {
             try
             {
-                RegistryKey key =
-                    Registry.CurrentUser.OpenSubKey(
-                        @"Software\Microsoft\Windows\CurrentVersion\Run",
-                        true
-                    );
-
-                string exePath =
-                    Application.ExecutablePath;
-
-                object current =
-                    key.GetValue(AppName);
-
-                if (current == null ||
-                    current.ToString() != exePath)
+                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Run"))
                 {
-                    key.SetValue(
-                        AppName,
-                        exePath
-                    );
-
-                    LogManager.Write(
-                        "Autostart registered"
-                    );
+                    string command = "\"" + Application.ExecutablePath + "\"";
+                    object current = key.GetValue(AppName);
+                    if (current == null || current.ToString() != command)
+                    {
+                        key.SetValue(AppName, command, RegistryValueKind.String);
+                        LogManager.Write("Autostart registered");
+                    }
                 }
             }
             catch

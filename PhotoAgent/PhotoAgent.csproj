@@ -92,6 +92,10 @@
     <Compile Include="CameraConfigurator.cs" />
     <Compile Include="CameraInfo.cs" />
     <Compile Include="CameraManager.cs" />
+    <Compile Include="CameraShutdown.cs" />
+    <Compile Include="CameraPreviewControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
     <Compile Include="CameraSetupForm.cs" />
     <Compile Include="CaptureCommand.cs" />
     <Compile Include="CaptureForm.cs">
@@ -109,6 +113,8 @@
     </Compile>
     <Compile Include="LogManager.cs" />
     <Compile Include="PhotoSession.cs" />
+    <Compile Include="PhotoTransfer.cs" />
+    <Compile Include="TransferCache.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="SessionManager.cs" />
