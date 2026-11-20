@@ -78,88 +78,93 @@ namespace PhotoAgent
         internal static CaptureResult CaptureDocument(
             CaptureCommand cmd, Action<string, string> photoReady)
         {
-            CaptureResult result =
-                new CaptureResult();
+            return CaptureSeries(cmd, photoReady, true, true);
+        }
 
+        public static CaptureResult CapturePhoto(CaptureCommand cmd)
+        {
+            return CapturePhoto(cmd, null);
+        }
+
+        internal static CaptureResult CapturePhoto(
+            CaptureCommand cmd, Action<string, string> photoReady)
+        {
+            return CaptureSeries(cmd, photoReady, true, false);
+        }
+
+        public static CaptureResult CaptureDocuments(CaptureCommand cmd)
+        {
+            return CaptureDocuments(cmd, null);
+        }
+
+        internal static CaptureResult CaptureDocuments(
+            CaptureCommand cmd, Action<string, string> photoReady)
+        {
+            return CaptureSeries(cmd, photoReady, false, true);
+        }
+
+        private static CaptureResult CaptureSeries(CaptureCommand cmd,
+            Action<string, string> photoReady, bool includeLomo, bool includeDocuments)
+        {
+            var result = new CaptureResult();
+            bool legacySeries = includeLomo && includeDocuments;
             try
             {
-                string documentFolder =
-                    Path.Combine(
-                        @"C:\psa_photos\photos",
-                        cmd.document_number
-                    );
+                string documentFolder = Path.Combine(
+                    @"C:\psa_photos\photos", cmd.document_number);
+                Directory.CreateDirectory(documentFolder);
+                SessionManager.Current = new PhotoSession
+                {
+                    RequestId = cmd.request_id,
+                    DocumentNumber = cmd.document_number,
+                    PhotosFolder = documentFolder,
+                    ExtraPhotoCount = 0
+                };
 
-                Directory.CreateDirectory(
-                    documentFolder
-                );
-
-                SessionManager.Current =
-                    new PhotoSession
+                Action<string, string> ready = photoReady;
+                if (!legacySeries)
+                {
+                    ready = (file, type) =>
                     {
-                        RequestId =
-                            cmd.request_id,
-
-                        DocumentNumber =
-                            cmd.document_number,
-
-                        PhotosFolder =
-                            documentFolder,
-
-                        ExtraPhotoCount = 0
+                        if (photoReady != null) photoReady(file, type);
+                        // Independent requests must not replace unrelated archive photos.
+                        ArchiveManager.ArchivePhoto(cmd.document_number, file);
                     };
+                }
 
-                if (!CaptureLomo(
-                    cmd,
-                    documentFolder, photoReady))
-                {
+                if (includeLomo && !CaptureLomo(cmd, documentFolder, ready))
                     return result;
-                }
 
-                using (var documentPreview = new CameraPreviewControl(
-                    ConfigManager.Current.documentCameraId))
+                if (includeDocuments)
                 {
-                    if (!CapturePassport(cmd, documentFolder, documentPreview, photoReady))
-                        return result;
-
-                    if (!CaptureRegistration(cmd, documentFolder, documentPreview, photoReady))
-                        return result;
+                    // Neither create nor check the document camera for a face-only request.
+                    using (var preview = new CameraPreviewControl(
+                        ConfigManager.Current.documentCameraId))
+                    {
+                        if (!CapturePassport(cmd, documentFolder, preview, ready, legacySeries))
+                            return result;
+                        if (!CaptureRegistration(cmd, documentFolder, preview, ready))
+                            return result;
+                    }
                 }
 
-                ArchiveManager.ArchiveDocument(
-                    cmd.document_number
-                );
-
-                result.Files.Add(
-                    cmd.document_number
-                    + "_lomo.jpg"
-                );
-
-                result.Files.Add(
-                    cmd.document_number
-                    + "_passport.jpg"
-                );
-
-                result.Files.Add(
-                    cmd.document_number
-                    + "_registration.jpg"
-                );
-
+                if (legacySeries)
+                    ArchiveManager.ArchiveDocument(cmd.document_number);
+                if (includeLomo)
+                    result.Files.Add(cmd.document_number + "_lomo.jpg");
+                if (includeDocuments)
+                {
+                    result.Files.Add(cmd.document_number + "_passport.jpg");
+                    result.Files.Add(cmd.document_number + "_registration.jpg");
+                }
                 result.Success = true;
-
-                return result;
             }
             catch (Exception ex)
             {
-                LogManager.Write(
-                    "CaptureWorkflow error: "
-                    + ex.Message
-                );
-
-                result.Success = false;
+                LogManager.Write("CaptureWorkflow error: " + ex.Message);
                 result.ErrorMessage = ex.Message;
-
-                return result;
             }
+            return result;
         }
 
         private static bool CaptureLomo(
@@ -211,7 +216,8 @@ namespace PhotoAgent
         private static bool CapturePassport(
             CaptureCommand cmd,
             string folder,
-            CameraPreviewControl preview, Action<string, string> photoReady)
+            CameraPreviewControl preview, Action<string, string> photoReady,
+            bool archiveDocument)
         {
             using (CaptureForm form =
                 new CaptureForm(
@@ -250,9 +256,8 @@ namespace PhotoAgent
                     + fileName
                 );
 
-                ArchiveManager.ArchiveDocument(
-                    cmd.document_number
-                );
+                if (archiveDocument)
+                    ArchiveManager.ArchiveDocument(cmd.document_number);
 
                 return true;
             }

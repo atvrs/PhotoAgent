@@ -267,7 +267,7 @@ internal static class CommandTests
     private static void UnknownCommand(TestEnvironment env)
     {
         File.WriteAllText(env.CommandPath("unknown"), env.Json("unknown").Replace(
-            "capture_document", "unsupported"));
+            "capture_photo", "unsupported"));
         env.ScanTwice();
         Assert(env.Status("unknown") == "error" && env.Captures == 0, "Unknown command was lost");
     }
@@ -518,7 +518,7 @@ internal static class CommandTests
         {
             return new JavaScriptSerializer().Serialize(new
             {
-                command = "capture_document", request_id = id, document_number = "TEST_DOC"
+                command = "capture_photo", request_id = id, document_number = "TEST_DOC"
             });
         }
 
@@ -549,6 +549,16 @@ namespace PhotoAgent
     {
         public static Func<CaptureResult> OnCapture;
         public static Action<string, string> PhotoReady;
+        public static CaptureResult CapturePhoto(CaptureCommand command, Action<string, string> ready)
+        {
+            PhotoReady = ready;
+            return OnCapture();
+        }
+        public static CaptureResult CaptureDocuments(CaptureCommand command, Action<string, string> ready)
+        {
+            PhotoReady = ready;
+            return OnCapture();
+        }
         public static CaptureResult CaptureDocument(CaptureCommand command, Action<string, string> ready)
         {
             PhotoReady = ready;

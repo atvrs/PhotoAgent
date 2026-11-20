@@ -52,6 +52,20 @@ internal static class CameraTests
 
     private static void RunAll()
     {
+            Run("Startup without assignments does not inspect cameras or open setup", env => StartupWithoutCameraChecks(env, null));
+            Run("Startup with only a face assignment does not inspect cameras", env => StartupWithoutCameraChecks(env, "face"));
+            Run("Startup with only a document assignment does not inspect cameras", env => StartupWithoutCameraChecks(env, "document"));
+            Run("Face request uses only its camera and preserves other photos", env => SplitCapture(env, false, true));
+            Run("Document request uses only its camera with a continuous two-photo preview", env => SplitCapture(env, true, true));
+            Run("Documents can be photographed before any face photo exists", env => SplitCapture(env, true, false));
+            Run("A face request and then a document request have independent manifests", env => SplitOrder(env, false));
+            Run("A document request and then a face request have independent manifests", env => SplitOrder(env, true));
+            Run("Missing face camera pauses only the face request until connection", env => ReconnectSplit(env, false));
+            Run("Missing document camera pauses only the document request until connection", env => ReconnectSplit(env, true));
+            Run("Closing a missing face camera returns zero ready photos", env => CloseSplit(env, false));
+            Run("Closing a missing document camera returns zero ready photos", env => CloseSplit(env, true));
+            Run("Cancelling registration preserves the ready passport and unrelated photos", PartialDocuments);
+            Run("Document quota rejection preserves the first ready passport", DocumentQuota);
             Run("Missing face camera resumes the same three-photo request", env => ReconnectWorkflow(env, "face"));
             Run("Missing document camera resumes after the face photo", env => ReconnectWorkflow(env, "document"));
             Run("Closing the missing-camera window returns an error", env => CloseMissing(env, false));
@@ -135,6 +149,221 @@ internal static class CameraTests
         Assert(env.Status() == "ok", "Reconnected request failed");
         Assert(Directory.GetFiles(env.Photos, "*.jpg").Length == 3, "Three-photo workflow did not finish");
         Assert(!CaptureState.IsBusy && !CaptureState.IsWaitingForCamera, "Request state leaked");
+    }
+
+    private static void StartupWithoutCameraChecks(TestEnvironment env, string assignment)
+    {
+        ConfigManager.Current.lomoCameraId = assignment == "face" ? "face" : "";
+        ConfigManager.Current.documentCameraId = assignment == "document" ? "document" : "";
+        int forms = Application.OpenForms.Count;
+        var context = new TrayApplicationContext();
+        try
+        {
+            Assert(CameraManager.ConnectionChecks.Count == 0 && CameraManager.Devices.Count == 0
+                && CameraManager.Enumerations == 0, "Startup inspected a camera");
+            Assert(Application.OpenForms.Count == forms, "Startup opened an assignment or capture window");
+        }
+        finally
+        {
+            // Stop background UI resources without exiting the persistent test host.
+            foreach (FieldInfo field in typeof(TrayApplicationContext)
+                .GetFields(BindingFlags.Instance | BindingFlags.NonPublic))
+            {
+                var resource = field.GetValue(context) as IDisposable;
+                if (resource != null) resource.Dispose();
+            }
+            context.Dispose();
+        }
+    }
+
+    private static void ConfigureSplit(bool documents)
+    {
+        ConfigManager.Current.lomoCameraId = documents ? "" : "face";
+        ConfigManager.Current.documentCameraId = documents ? "document" : "";
+        CameraManager.Connected.Add(documents ? "document" : "face");
+    }
+
+    private static void AssertOnlyCamera(string camera)
+    {
+        Assert(CameraManager.ConnectionChecks.Count > 0
+            && CameraManager.ConnectionChecks.All(id => id == camera), "An unrelated camera was checked");
+        Assert(CameraManager.Devices.All(device => device.Source == camera), "An unrelated camera was opened");
+    }
+
+    private static void SplitCapture(TestEnvironment env, bool documents, bool seed)
+    {
+        if (seed) SeedRecapture(env);
+        ConfigureSplit(documents);
+        var windows = new HashSet<Form>();
+        var titles = new List<string>();
+        CameraPreviewControl shared = null;
+        DateTime started = DateTime.MinValue;
+        env.Process(documents ? "capture_documents" : "capture_photo", null, form =>
+        {
+            if (windows.Add(form)) titles.Add(form.Text);
+            if (Preview(form).IsWaitingForCamera) return;
+            int ready = documents && form.Text == "Прописка" ? 1 : 0;
+            Assert(env.Notifications().Count == ready, "Photo notification waited for the end of the request");
+            if (ready == 0)
+            {
+                shared = Preview(form);
+                started = CaptureState.Started;
+            }
+            else
+            {
+                Assert(ReferenceEquals(shared, Preview(form)), "Document preview was recreated between photos");
+                Assert(CameraManager.Devices.Single().StopCalls == 0, "Document camera was stopped between photos");
+                Assert(CaptureState.Started == started, "Document timeout was reset between photos");
+                AssertReadablePhoto(env.Notifications().Single());
+                Assert(!File.Exists(Path.Combine(env.Responses, env.Request + ".done")),
+                    "Done appeared before registration was taken");
+            }
+            PressKey(form, Keys.Space);
+        });
+        Assert(titles.SequenceEqual(documents ? new[] { "Паспорт", "Прописка" } : new[] { "Ломосдатчик" }),
+            "Independent capture opened the wrong stages");
+        AssertOnlyCamera(documents ? "document" : "face");
+        var notices = env.Notifications();
+        var types = documents ? new[] { "passport", "registration" } : new[] { "lomo" };
+        Assert(env.Status() == "ok" && notices.Select(p => p.photo_type).SequenceEqual(types),
+            "Independent capture returned the wrong photos");
+        Assert((int)env.Response()["photo_count"] == types.Length
+            && ((System.Collections.ICollection)env.Response()["photos"]).Count == types.Length
+            && ((System.Collections.ICollection)env.Response()["files"]).Count == types.Length,
+            "Manifest includes a photo from another request");
+        for (int i = 0; i < notices.Count; i++)
+        {
+            ReadyPhoto photo = notices[i];
+            Assert(photo.sequence == i + 1 && photo.request_id == env.Request
+                && photo.relative_path == Path.Combine("transfer", env.Request, photo.file),
+                "Independent request did not start its own sequence");
+            AssertReadablePhoto(photo);
+            byte[] jpeg = File.ReadAllBytes(Path.Combine(PhotoTransfer.DataRoot, photo.relative_path));
+            Assert(jpeg.SequenceEqual(File.ReadAllBytes(Path.Combine(env.Photos, photo.file)))
+                && jpeg.SequenceEqual(File.ReadAllBytes(Path.Combine(env.Archive, photo.file))),
+                "Working, transfer and archive copies differ");
+        }
+        foreach (string type in new[] { "lomo", "passport", "registration" }.Except(types))
+        {
+            string name = env.Document + "_" + type + ".jpg";
+            if (seed)
+            {
+                Assert(File.ReadAllText(Path.Combine(env.Photos, name)) == "old " + type
+                    && File.ReadAllText(Path.Combine(env.Archive, name)) == "old archive " + type,
+                    "Independent capture changed an unrelated photograph");
+            }
+            else
+                Assert(!File.Exists(Path.Combine(env.Photos, name)), "Unrequested working photo was created");
+        }
+        if (seed)
+            Assert(File.ReadAllText(Path.Combine(env.Archive, "archive-only.jpg")) == "keep archive-only",
+                "Independent capture deleted an archive-only photo");
+    }
+
+    private static void SplitOrder(TestEnvironment env, bool documentsFirst)
+    {
+        CameraManager.Connected.UnionWith(new[] { "face", "document" });
+        Action<Form> capture = form =>
+        {
+            if (!Preview(form).IsWaitingForCamera) PressKey(form, Keys.Space);
+        };
+        env.Process(documentsFirst ? "capture_documents" : "capture_photo", null, capture);
+        Assert(env.Status() == "ok", "First independent request failed");
+        ReadyPhoto old = env.Notifications()[0];
+        string oldPath = Path.Combine(PhotoTransfer.DataRoot, old.relative_path);
+        byte[] original = File.ReadAllBytes(oldPath);
+        using (var reader = new FileStream(oldPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            env.Request = Guid.NewGuid().ToString("N");
+            env.Process(documentsFirst ? "capture_photo" : "capture_documents", null, capture);
+            var photos = env.Notifications();
+            Assert(env.Status() == "ok" && photos.Count == (documentsFirst ? 1 : 2)
+                && photos[0].sequence == 1 && photos.All(photo => photo.request_id == env.Request),
+                "Second request reused the first request's manifest or sequence");
+            using (var copied = new MemoryStream())
+            {
+                reader.CopyTo(copied);
+                Assert(original.SequenceEqual(copied.ToArray()), "Second request changed a JPEG being read by 1C");
+            }
+        }
+        Assert(Directory.GetFiles(env.Photos, "*.jpg").Length == 3, "Independent requests lost a working photo");
+    }
+
+    private static void ReconnectSplit(TestEnvironment env, bool documents)
+    {
+        ConfigureSplit(documents);
+        CameraManager.Connected.Clear();
+        var clock = Stopwatch.StartNew();
+        bool waited = false;
+        env.Process(documents ? "capture_documents" : "capture_photo", null, form =>
+        {
+            if (Preview(form).IsWaitingForCamera)
+            {
+                waited = true;
+                Assert(Placeholder(Preview(form)) && CaptureState.IsWaitingForCamera
+                    && !CaptureState.IsTimeoutDue(1), "Missing camera did not pause this request");
+                PressKey(form, Keys.Space);
+                Assert(form.Visible, "Missing camera accepted a photograph");
+                if (clock.ElapsedMilliseconds > 1400)
+                    CameraManager.Connected.Add(documents ? "document" : "face");
+            }
+            else PressKey(form, Keys.Space);
+        });
+        Assert(waited && env.Status() == "ok", "Independent request did not resume after connection");
+        AssertOnlyCamera(documents ? "document" : "face");
+    }
+
+    private static void CloseSplit(TestEnvironment env, bool documents)
+    {
+        ConfigureSplit(documents);
+        CameraManager.Connected.Clear();
+        env.Process(documents ? "capture_documents" : "capture_photo", null, form => form.Close());
+        env.AssertIncomplete();
+        Assert((int)env.Response()["photo_count"] == 0 && env.Notifications().Count == 0,
+            "Closing an independent capture announced a photograph");
+        AssertOnlyCamera(documents ? "document" : "face");
+    }
+
+    private static void PartialDocuments(TestEnvironment env)
+    {
+        SeedRecapture(env);
+        ConfigureSplit(true);
+        env.Process("capture_documents", null, form =>
+        {
+            if (Preview(form).IsWaitingForCamera) return;
+            if (form.Text == "Паспорт") PressKey(form, Keys.Space);
+            else form.Close();
+        });
+        env.AssertIncomplete();
+        ReadyPhoto photo = env.Notifications().Single();
+        Assert((int)env.Response()["photo_count"] == 1 && photo.sequence == 1 && photo.photo_type == "passport",
+            "Cancellation lost the ready passport or included another photo");
+        AssertReadablePhoto(photo);
+        Assert(File.ReadAllText(Path.Combine(env.Photos, env.Document + "_registration.jpg")) == "old registration"
+            && File.ReadAllText(Path.Combine(env.Archive, env.Document + "_registration.jpg")) == "old archive registration"
+            && File.ReadAllText(Path.Combine(env.Archive, env.Document + "_lomo.jpg")) == "old archive lomo",
+            "Cancelling registration changed unrelated old photographs");
+        AssertOnlyCamera("document");
+    }
+
+    private static void DocumentQuota(TestEnvironment env)
+    {
+        ConfigureSplit(true);
+        env.Process("capture_documents", null, form =>
+        {
+            if (Preview(form).IsWaitingForCamera) return;
+            if (form.Text == "Прописка")
+            {
+                long bytes = Directory.GetFiles(Path.Combine(PhotoTransfer.DataRoot, "transfer", env.Request))
+                    .Sum(path => new FileInfo(path).Length);
+                ConfigManager.Current.transferMaxMb = (bytes + 1) / (1024d * 1024d);
+            }
+            PressKey(form, Keys.Space);
+        });
+        Assert(env.Status() == "error" && (int)env.Response()["photo_count"] == 1,
+            "Quota rejection lost the passport or returned successful documents");
+        AssertReadablePhoto(env.Notifications().Single());
+        AssertOnlyCamera("document");
     }
 
     private static void CloseMissing(TestEnvironment env, bool extra)
@@ -871,9 +1100,20 @@ namespace PhotoAgent
     internal static class CameraManager
     {
         public static readonly HashSet<string> Connected = new HashSet<string>();
+        public static readonly List<string> ConnectionChecks = new List<string>();
+        public static int Enumerations;
         public static readonly List<FakeVideoSource> Devices = new List<FakeVideoSource>();
         public static Func<string, FakeVideoSource> Factory;
-        public static bool IsConnected(string id) { return Connected.Contains(id); }
+        public static bool IsConnected(string id)
+        {
+            ConnectionChecks.Add(id);
+            return Connected.Contains(id);
+        }
+        public static List<CameraInfo> GetCameras()
+        {
+            Enumerations++;
+            throw new Exception("Startup must not enumerate cameras");
+        }
         public static IVideoSource CreatePreviewDevice(string id)
         {
             FakeVideoSource device = Factory(id);
@@ -883,6 +1123,8 @@ namespace PhotoAgent
         public static void Reset()
         {
             Connected.Clear();
+            ConnectionChecks.Clear();
+            Enumerations = 0;
             Devices.Clear();
             Factory = id => new FakeVideoSource(id);
         }
@@ -936,6 +1178,20 @@ namespace PhotoAgent
         }
     }
 
-    internal static class ConfigManager { public static Config Current; }
-    internal static class LogManager { public static void Write(string message) { Console.WriteLine(message); } }
+    internal static class ConfigManager
+    {
+        public static Config Current;
+        public static void Load() { }
+        public static void Save() { }
+    }
+    internal static class AutoStartManager { public static void EnsureAutoStart() { } }
+    internal static class CameraConfigurator
+    {
+        public static bool Run() { throw new Exception("Startup must not open camera assignment"); }
+    }
+    internal static class LogManager
+    {
+        public static void Write(string message) { Console.WriteLine(message); }
+        public static void RunMaintenance() { }
+    }
 }

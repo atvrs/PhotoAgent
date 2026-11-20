@@ -170,31 +170,8 @@ namespace PhotoAgent
                 "PhotoAgent started"
             );
 
-            if (string.IsNullOrWhiteSpace(
-        ConfigManager.Current.lomoCameraId)
-    ||
-    string.IsNullOrWhiteSpace(
-        ConfigManager.Current.documentCameraId))
-            {
-                bool configured =
-                    CameraConfigurator.Run();
-
-                if (!configured)
-                {
-                    Application.Exit();
-
-                    return;
-                }
-            }
-
-            foreach (CameraInfo camera in
-    CameraManager.GetCameras())
-            {
-                LogManager.Write(
-                    "Camera found: "
-                    + camera.Name
-                );
-            }
+            // Startup never enumerates cameras or launches the assignment wizard.
+            // Each capture window checks only its assigned camera on demand.
             LogManager.Write(
     "Preview size: "
     + ConfigManager.Current.previewWidth

@@ -113,7 +113,11 @@ namespace PhotoAgent
                             + "; command: " + command.command);
 
                         CaptureResult result;
-                        if (command.command == "capture_document")
+                        if (command.command == "capture_photo")
+                            result = CaptureWorkflow.CapturePhoto(command, transfer.PhotoSaved);
+                        else if (command.command == "capture_documents")
+                            result = CaptureWorkflow.CaptureDocuments(command, transfer.PhotoSaved);
+                        else if (command.command == "capture_document")
                             result = CaptureWorkflow.CaptureDocument(command, transfer.PhotoSaved);
                         else if (command.command == "capture_extra")
                             result = CaptureWorkflow.CaptureExtra(command, transfer.PhotoSaved);
